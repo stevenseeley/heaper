@@ -1,0 +1,6 @@
+Setup
+-----
+copy heaper.py into your immunity debugger pycommands directory typically:
+C:\Program Files\Immunity Inc\Immunity Debugger\PyCommands\
+
+To see the usage type !heaper from Immunity Debuggers command line window
