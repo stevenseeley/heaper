@@ -10,7 +10,8 @@ Currently there is full support for Windows XP. In the near future it will supoi
 Setup
 =====
 
-You will need to install:
+You will need to install the following prerequisites:
+
 - [Graphviz](http://www.graphviz.org/Download.php)
 - [pydot](http://code.google.com/p/pydot/)
 - [pyparsing](http://sourceforge.net/projects/pyparsing/)
