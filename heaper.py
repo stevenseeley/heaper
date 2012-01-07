@@ -447,7 +447,7 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
             if not entry.isEmpty():
                 b = 0
                 window.Log("-" * 77)
-                window.Log("(0x%x) No. of chunks: %d, ListEntry: 0x%08x, Size: (%d+8=%d)" % 
+                window.Log("Lookaside[0x%03x] No. of chunks: %d, ListEntry: 0x%08x, Size: (%d+8=%d)" % 
         (ndx, entry.Depth, entry.addr, (ndx*8), (ndx*8+8)), address = entry.addr)
                 window.Log("")
                 window.Log("    List structure:")
