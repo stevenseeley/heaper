@@ -446,7 +446,6 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                     
             if not entry.isEmpty():
                 b = 0
-                window.Log("-" * 77)
                 window.Log("Lookaside[0x%03x] No. of chunks: %d, ListEntry: 0x%08x, Size: (%d+8=%d)" % 
         (ndx, entry.Depth, entry.addr, (ndx*8), (ndx*8+8)), address = entry.addr)
                 window.Log("")
@@ -494,11 +493,11 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                         if chunkSelfSize != "":
                             if graphic_structure:
                                 chunk_nodes.append(pydot.Node("size_overwrite_%x" % 
-                (a), style="filled", shape="rectangle", label=chunk_data+"\nSize overwritten..", fillcolor="red"))
+                                (a), style="filled", shape="rectangle", label=chunk_data+"\nSize overwritten..", fillcolor="red"))
                             window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x, Size: %d (0x%03x)" % 
-                (b, a, (a + 0x8), chunkSelfSize, chunkSelfSize), address = a) 
+                            (b, a, (a + 0x8), chunkSelfSize, chunkSelfSize), address = a) 
                             window.Log("        -> chunk size should have been %d (0x%04x)! We have a possible chunk overwrite.." % 
-                (ndx * block, ndx * block), focus=1)
+                            (ndx * block, ndx * block), focus=1)
                         # else if the chunk address has been overwrtten and we couldnt read the chunks size...
                         # generally because the previous chunks flink was clobbered..
                         elif chunkSelfSize == "":
@@ -513,12 +512,11 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                         if graphic_structure:
                             chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#3366ff"))
                         window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x, Size: %d (0x%03x), Cookie: 0x%01x" % 
-            (b, a, (a + 0x8), (ndx * block), (ndx * block), chunkCookie), address = a) 
-                            
+                        (b, a, (a + 0x8), (ndx * block), (ndx * block), chunkCookie), address = a) 
+                window.Log("-" * 77)        
             if graphic_structure:
                 chunk_dict[ndx] = chunk_nodes
                 ndx_nodes.append(pydot.Node("Lookaside[%s]" % ndx, style="filled", shape="rectangle", fillcolor="#66FF66"))    
-    
     else:
         window.Log("Cannot find lookaside list for this heap")
         imm.log( "Cannot find lookaside list for this heap" )
@@ -663,7 +661,7 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                 # if we are not FreeList[0] and yet we have chunks
                 # 
                 if a != 0:
-                    window.Log("FreeList[0x%02x] - 0x%08x | +0x4 = 0x%08x | -0x4 = 0x%08x [expected size: %s-8=%s]" % (a, e[0],(e[0]+0x4), (e[0]-0x4), expected_size), address = e[0])
+                    window.Log("FreeList[0x%02x] - 0x%08x | +0x4 = 0x%08x | -0x4 = 0x%08x [expected size: %s-8=%s]" % (a, e[0],(e[0]+0x4), (e[0]-0x4), expected_size, result_of_expected_size), address = e[0])
                     window.Log("        [FreeList[0x%02x].blink : 0x%08x | FreeLists[%03d].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
                 else:
                     window.Log("FreeList[0x%02x] - 0x%08x | +0x4 = 0x%08x | -0x4 = 0x%08x [expected size: %s]" % (a, e[0],(e[0]+0x4), (e[0]-0x4), expected_size_freelist0), address = e[0])
@@ -867,6 +865,91 @@ def dump_function_pointers(window, imm, writable_segment, patch=False, restore=F
         return "(+) Patched %s addresses with 0x%x" % (address_to_patch, 0x41414141)
         
     return "(+) Dumped all IAT pointers from %s" % imm.getDebuggedName()    
+
+def dump_segment_structure(pheap, window, imm, heap):
+    for segment in pheap.Segments:
+        window.Log("")
+        window.Log("-" * 19)
+        window.Log("Segment: 0x%08x" % segment.BaseAddress)
+        window.Log("-" * 19)
+        window.Log("")
+        entry_0 = imm.readMemory(segment.BaseAddress, 4)
+        entry_0 = reverse(entry_0)
+        entry_0 = int(binascii.hexlify(entry_0),16)
+        entry_1 = imm.readMemory(segment.BaseAddress+0x4, 4)
+        entry_1 = reverse(entry_1)
+        entry_1 = int(binascii.hexlify(entry_1),16)                   
+        signature = imm.readMemory(segment.BaseAddress+0x8, 4)
+        signature = reverse(signature)
+        signature = int(binascii.hexlify(signature),16)  
+        flags = imm.readMemory(segment.BaseAddress+0xc, 4)
+        flags = reverse(flags)
+        flags = int(binascii.hexlify(flags),16)  
+        heap_ = imm.readMemory(segment.BaseAddress+0x10, 4)
+        heap_ = reverse(heap_)
+        heap_ = int(binascii.hexlify(heap_),16)      
+                                    
+        LargestUncommitedRange = imm.readMemory(segment.BaseAddress+0x14, 4)
+        LargestUncommitedRange = reverse(LargestUncommitedRange)
+        LargestUncommitedRange = int(binascii.hexlify(LargestUncommitedRange),16)
+                    
+        BaseAddress = imm.readMemory(segment.BaseAddress+0x18, 4)
+        BaseAddress = reverse(BaseAddress)
+        BaseAddress = int(binascii.hexlify(BaseAddress),16) 
+                    
+        NumberOfPages = imm.readMemory(segment.BaseAddress+0x1c, 4)
+        NumberOfPages = reverse(NumberOfPages)
+        NumberOfPages = int(binascii.hexlify(NumberOfPages),16) 
+                    
+        FirstEntry = imm.readMemory(segment.BaseAddress+0x20, 4)
+        FirstEntry = reverse(FirstEntry)
+        FirstEntry = int(binascii.hexlify(FirstEntry),16) 
+                    
+        LastValidEntry = imm.readMemory(segment.BaseAddress+0x24, 4)
+        LastValidEntry = reverse(LastValidEntry)
+        LastValidEntry = int(binascii.hexlify(LastValidEntry),16) 
+
+        NumberOfUncommitedPages = imm.readMemory(segment.BaseAddress+0x28, 4)
+        NumberOfUncommitedPages = reverse(NumberOfUncommitedPages)
+        NumberOfUncommitedPages = int(binascii.hexlify(NumberOfUncommitedPages),16)                    
+
+        NumberOfUncommitedRanges = imm.readMemory(segment.BaseAddress+0x2c, 4)
+        NumberOfUncommitedRanges = reverse(NumberOfUncommitedRanges)
+        NumberOfUncommitedRanges = int(binascii.hexlify(NumberOfUncommitedRanges),16)  
+                    
+        UnCommitedRanges = imm.readMemory(segment.BaseAddress+0x30, 4)
+        UnCommitedRanges = reverse(UnCommitedRanges)
+        UnCommitedRanges = int(binascii.hexlify(UnCommitedRanges),16) 
+                    
+        AllocatorBackTraceIndex = imm.readMemory(segment.BaseAddress+0x34, 2)
+        AllocatorBackTraceIndex = reverse(AllocatorBackTraceIndex)
+        AllocatorBackTraceIndex = int(binascii.hexlify(AllocatorBackTraceIndex),16)                     
+
+        Reserved = imm.readMemory(segment.BaseAddress+0x36, 2)
+        Reserved = reverse(Reserved)
+        Reserved = int(binascii.hexlify(Reserved),16) 
+
+        LastEntryInSegment = imm.readMemory(segment.BaseAddress+0x38, 4)
+        LastEntryInSegment = reverse(LastEntryInSegment)
+        LastEntryInSegment = int(binascii.hexlify(LastEntryInSegment),16) 
+                                                                                                                     
+        window.Log("+0x000 Entry  (high)            : 0x%08x" % entry_0,entry_0)
+        window.Log("+0x000 Entry  (low)             : 0x%08x" % entry_1,entry_1)
+        window.Log("+0x008 Signature                : 0x%08x" % signature,signature)
+        window.Log("+0x00c Flags                    : 0x%08x" % flags,flags)
+        window.Log("+0x010 heap                     : 0x%08x" % heap_,heap_)
+        window.Log("+0x014 LargestUncommitedRange   : 0x%08x" % LargestUncommitedRange,LargestUncommitedRange)
+        window.Log("+0x018 BaseAddress              : 0x%08x" % BaseAddress,BaseAddress)
+        window.Log("+0x01c NumberOfPages            : 0x%08x" % NumberOfPages,NumberOfPages)
+        window.Log("+0x020 FirstEntry               : 0x%08x" % FirstEntry,FirstEntry)
+        window.Log("+0x024 LastValidEntry           : 0x%08x" % LastValidEntry,LastValidEntry)
+        window.Log("+0x028 NumberOfUncommitedPages  : 0x%08x" % NumberOfUncommitedPages,NumberOfUncommitedPages)
+        window.Log("+0x02c NumberOfUncommitedRanges : 0x%08x" % NumberOfUncommitedRanges,NumberOfUncommitedRanges)
+        window.Log("+0x030 UnCommitedRanges         : 0x%08x" % UnCommitedRanges,UnCommitedRanges)
+        window.Log("+0x034 AllocatorBackTraceIndex  : 0x%08x" % AllocatorBackTraceIndex,AllocatorBackTraceIndex)
+        window.Log("+0x036 Reserved                 : 0x%08x" % Reserved,Reserved)
+        window.Log("+0x038 LastEntryInSegment       : 0x%08x" % LastEntryInSegment,LastEntryInSegment)
+    return "(+) Dumped all Heap Segmements in heap 0x%08x" % heap
 
 def analyse_heap(heap, imm, window):
     if heap and ( heap in imm.getHeapsAddress() ):
@@ -1094,59 +1177,40 @@ def main(args):
             
             # analyse the lookaside list
             elif args[0].lower().strip() == "analyselal" or args[0].lower().strip() == "al":
-                try:
-                    heap = args[1].lower().strip()
-                    heap = int(heap,16)
-                except:
-                    return "Invalid heap address"
-                if heap and ( heap in imm.getHeapsAddress() ): 
-                    pheap = imm.getHeap( heap ) 
-                    if imm.getOsVersion() == "xp":
-                        FrontEndHeap = imm.readMemory(heap+0x580, 4)
-                        FrontEndHeap = reverse(FrontEndHeap)
-                        FrontEndHeap = int(binascii.hexlify(FrontEndHeap),16) 
-                        window.Log("-" * 77)
-                        window.Log("Lookaside List structure @ 0x%08x" % FrontEndHeap)
-                        window.Log("-" * 77)
-                        if custfilename:
-                            dump_lal(imm, pheap, graphic_structure, window, filename)
-                        else:
-                            dump_lal(imm, pheap, graphic_structure, window)
+                pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                if imm.getOsVersion() == "xp":
+                    FrontEndHeap = imm.readMemory(heap+0x580, 4)
+                    FrontEndHeap = reverse(FrontEndHeap)
+                    FrontEndHeap = int(binascii.hexlify(FrontEndHeap),16) 
+                    window.Log("-" * 77)
+                    window.Log("Lookaside List structure @ 0x%08x" % FrontEndHeap)
+                    window.Log("-" * 77)
+                    if custfilename:
+                        dump_lal(imm, pheap, graphic_structure, window, filename)
                     else:
-                        window.Log("Lookaside list analyse not supported under Windows Vista and above")
+                        dump_lal(imm, pheap, graphic_structure, window)
                 else:
-                    imm.log("Invalid heap address!")
-                    return "Cannot read heap address"
+                    window.Log("Lookaside list analyse not supported under Windows Vista and above")
             
             # analyse freelists
             elif args[0].lower().strip() == "analysefreelist" or args[0].lower().strip() == "af":
-                try:
-                    heap = args[1].lower().strip()
-                    heap = int(heap,16)
-                except:
-                    return "Invalid heap address"
-                if heap and ( heap in imm.getHeapsAddress() ):
-                    pheap = imm.getHeap( heap )
-
-                    if imm.getOsVersion() == "xp":
-                        window.Log("-" * 62)
-                        window.Log("FreeList structure @ 0x%08x" % (heap+0x178))
-                        window.Log("-" * 62)
-                        if graphic_structure:
-                            if custfilename:
+                pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                if imm.getOsVersion() == "xp":
+                    window.Log("-" * 62)
+                    window.Log("FreeList structure @ 0x%08x" % (heap+0x178))
+                    window.Log("-" * 62)
+                    if graphic_structure:
+                        if custfilename:
                                 
-                                dump_freelist(imm, pheap, window, heap, graphic_structure, filename)
-                            else:
-                                dump_freelist(imm, pheap, window, heap, graphic_structure)
+                            dump_freelist(imm, pheap, window, heap, graphic_structure, filename)
                         else:
                             dump_freelist(imm, pheap, window, heap, graphic_structure)
-                        dump_FreeListInUse(pheap, window)
-                    # do vista and windows 7 freelist analyse?
                     else:
-                        window.Log("(-) Freelist analyse not supported under Vista and above")
+                        dump_freelist(imm, pheap, window, heap, graphic_structure)
+                    dump_FreeListInUse(pheap, window)
+                    # do vista and windows 7 freelist analyse?
                 else:
-                    imm.log("(-) Invalid heap address!")
-                    return "(-) Cannot read heap address"
+                    window.Log("(-) Freelist analyse not supported under Vista and above")
                         
             # analyse FreelistInUse
             elif args[0].lower().strip() == "freelistinuse" or args[0].lower().strip() == "fliu":
@@ -1166,16 +1230,7 @@ def main(args):
                 
             # analyse segment chunks
             elif args[0].lower().strip() == "analysechunks" or args[0].lower().strip() == "ac":
-                
-                try:
-                    heap = args[1].lower().strip()
-                    heap = int(heap,16)
-                except:
-                    return "(-) Invalid heap address"
-                try:
-                    pheap = imm.getHeap( heap )
-                except:
-                    return "(-) Invalid heap address"                
+                pheap, heap = get_heap_instance(args[1].lower().strip(), imm)               
                 show_detail = False
                 start_block = 0
                 finish_block = 0
@@ -1207,7 +1262,6 @@ def main(args):
                 window.Log("~" * 46)
 
                 for chunk in pheap.chunks:
-                    
                     if start_block and finish_block:
                         if chunk.addr <= finish_block and chunk.addr >= start_block:
                             window.Log("-" * 62)
@@ -1228,7 +1282,6 @@ def main(args):
                         
             # dump function pointers
             elif args[0].lower().strip() == "dumpfunctionpointer" or args[0].lower().strip() == "dfp":
-                
                 writable_segment = 0x00000000
                 writable_segment_size = 0x0
                 restore = False
@@ -1287,98 +1340,10 @@ def main(args):
             
             # analyse segments
             elif args[0].lower().strip() == "analysesegments" or args[0].lower().strip() == "as":
-                try:
-                    heap = args[1].lower().strip()
-                    heap = int(heap,16)
-                except:
-                    return "(-) Invalid heap address"
-                try:
-                    pheap = imm.getHeap( heap )
-                except:
-                    return "(-) Invalid heap address" 
-                for segment in pheap.Segments:
-                    window.Log("")
-                    window.Log("-" * 19)
-                    window.Log("Segment: 0x%08x" % segment.BaseAddress)
-                    window.Log("-" * 19)
-                    window.Log("")
-                    entry_0 = imm.readMemory(segment.BaseAddress, 4)
-                    entry_0 = reverse(entry_0)
-                    entry_0 = int(binascii.hexlify(entry_0),16)
-                    entry_1 = imm.readMemory(segment.BaseAddress+0x4, 4)
-                    entry_1 = reverse(entry_1)
-                    entry_1 = int(binascii.hexlify(entry_1),16)                   
-                    signature = imm.readMemory(segment.BaseAddress+0x8, 4)
-                    signature = reverse(signature)
-                    signature = int(binascii.hexlify(signature),16)  
-                    flags = imm.readMemory(segment.BaseAddress+0xc, 4)
-                    flags = reverse(flags)
-                    flags = int(binascii.hexlify(flags),16)  
-                    heap_ = imm.readMemory(segment.BaseAddress+0x10, 4)
-                    heap_ = reverse(heap_)
-                    heap_ = int(binascii.hexlify(heap_),16)      
-                                    
-                    LargestUncommitedRange = imm.readMemory(segment.BaseAddress+0x14, 4)
-                    LargestUncommitedRange = reverse(LargestUncommitedRange)
-                    LargestUncommitedRange = int(binascii.hexlify(LargestUncommitedRange),16)
-                    
-                    BaseAddress = imm.readMemory(segment.BaseAddress+0x18, 4)
-                    BaseAddress = reverse(BaseAddress)
-                    BaseAddress = int(binascii.hexlify(BaseAddress),16) 
-                    
-                    NumberOfPages = imm.readMemory(segment.BaseAddress+0x1c, 4)
-                    NumberOfPages = reverse(NumberOfPages)
-                    NumberOfPages = int(binascii.hexlify(NumberOfPages),16) 
-                    
-                    FirstEntry = imm.readMemory(segment.BaseAddress+0x20, 4)
-                    FirstEntry = reverse(FirstEntry)
-                    FirstEntry = int(binascii.hexlify(FirstEntry),16) 
-                    
-                    LastValidEntry = imm.readMemory(segment.BaseAddress+0x24, 4)
-                    LastValidEntry = reverse(LastValidEntry)
-                    LastValidEntry = int(binascii.hexlify(LastValidEntry),16) 
+                pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                dump_segment_structure(pheap, window, imm, heap)
+                
 
-                    NumberOfUncommitedPages = imm.readMemory(segment.BaseAddress+0x28, 4)
-                    NumberOfUncommitedPages = reverse(NumberOfUncommitedPages)
-                    NumberOfUncommitedPages = int(binascii.hexlify(NumberOfUncommitedPages),16)                    
-
-                    NumberOfUncommitedRanges = imm.readMemory(segment.BaseAddress+0x2c, 4)
-                    NumberOfUncommitedRanges = reverse(NumberOfUncommitedRanges)
-                    NumberOfUncommitedRanges = int(binascii.hexlify(NumberOfUncommitedRanges),16)  
-                    
-                    UnCommitedRanges = imm.readMemory(segment.BaseAddress+0x30, 4)
-                    UnCommitedRanges = reverse(UnCommitedRanges)
-                    UnCommitedRanges = int(binascii.hexlify(UnCommitedRanges),16) 
-                    
-                    AllocatorBackTraceIndex = imm.readMemory(segment.BaseAddress+0x34, 2)
-                    AllocatorBackTraceIndex = reverse(AllocatorBackTraceIndex)
-                    AllocatorBackTraceIndex = int(binascii.hexlify(AllocatorBackTraceIndex),16)                     
-
-                    Reserved = imm.readMemory(segment.BaseAddress+0x36, 2)
-                    Reserved = reverse(Reserved)
-                    Reserved = int(binascii.hexlify(Reserved),16) 
-
-                    LastEntryInSegment = imm.readMemory(segment.BaseAddress+0x38, 4)
-                    LastEntryInSegment = reverse(LastEntryInSegment)
-                    LastEntryInSegment = int(binascii.hexlify(LastEntryInSegment),16) 
-                                                                                                                     
-                    window.Log("+0x000 Entry  (high)            : 0x%08x" % entry_0,entry_0)
-                    window.Log("+0x000 Entry  (low)             : 0x%08x" % entry_1,entry_1)
-                    window.Log("+0x008 Signature                : 0x%08x" % signature,signature)
-                    window.Log("+0x00c Flags                    : 0x%08x" % flags,flags)
-                    window.Log("+0x010 heap                     : 0x%08x" % heap_,heap_)
-                    window.Log("+0x014 LargestUncommitedRange   : 0x%08x" % LargestUncommitedRange,LargestUncommitedRange)
-                    window.Log("+0x018 BaseAddress              : 0x%08x" % BaseAddress,BaseAddress)
-                    window.Log("+0x01c NumberOfPages            : 0x%08x" % NumberOfPages,NumberOfPages)
-                    window.Log("+0x020 FirstEntry               : 0x%08x" % FirstEntry,FirstEntry)
-                    window.Log("+0x024 LastValidEntry           : 0x%08x" % LastValidEntry,LastValidEntry)
-                    window.Log("+0x028 NumberOfUncommitedPages  : 0x%08x" % NumberOfUncommitedPages,NumberOfUncommitedPages)
-                    window.Log("+0x02c NumberOfUncommitedRanges : 0x%08x" % NumberOfUncommitedRanges,NumberOfUncommitedRanges)
-                    window.Log("+0x030 UnCommitedRanges         : 0x%08x" % UnCommitedRanges,UnCommitedRanges)
-                    window.Log("+0x034 AllocatorBackTraceIndex  : 0x%08x" % AllocatorBackTraceIndex,AllocatorBackTraceIndex)
-                    window.Log("+0x036 Reserved                 : 0x%08x" % Reserved,Reserved)
-                    window.Log("+0x038 LastEntryInSegment       : 0x%08x" % LastEntryInSegment,LastEntryInSegment)
-                return "(+) Dumped all Heap Segmements in heap 0x%08x" % heap
         # more than one command and that we cant understand
         else:
             return usage(imm)
