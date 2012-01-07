@@ -659,7 +659,6 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                 chunkNum = 0
 
                 # if we are not FreeList[0] and yet we have chunks
-                # 
                 if a != 0:
                     window.Log("FreeList[0x%02x] - 0x%08x | +0x4 = 0x%08x | -0x4 = 0x%08x [expected size: %s-8=%s]" % (a, e[0],(e[0]+0x4), (e[0]-0x4), expected_size, result_of_expected_size), address = e[0])
                     window.Log("        [FreeList[0x%02x].blink : 0x%08x | FreeLists[%03d].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
