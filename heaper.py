@@ -69,15 +69,15 @@ def to_hex(n):
 def bin_to_dec(binary):
     """Converts a binary list to decimal number"""
     dec = 0
-    bin = []
+    binary_list = []
     for b in binary:
-        bin.append(int(b))
+        binary_list.append(int(b))
     #reverse list:
     rev_bin = []
-    for item in bin:
+    for item in binary_list:
         rev_bin.insert(0,item)
     #calculate decimal
-    for index in xrange(len(bin)):
+    for index in xrange(len(binary_list)):
         dec += rev_bin[index] * 2**index
     return dec
 
@@ -245,7 +245,7 @@ def get_extended_usage():
     extusage["analysechunks"] = "\nanalysechunks <heap> / ac <heap> : Analyse a particular heap's chunks\n"
     extusage["analysechunks"] += "---------------------------------------------------------------------\n"
     extusage["analysechunks"] += "Use -r <start address> <end address> to view all the chunks between those ranges\n"
-    extusage["analysechunks"] += "Use -f to filter chunks by type (free/busy) eg: !heaper ac d20000 -f busy\n"
+    extusage["analysechunks"] += "Use -f to chunk_filter chunks by type (free/busy) eg: !heaper ac d20000 -f busy\n"
     extusage["analysechunks"] += "Use -v to view the first 16 bytes of each chunk\n"
     extusage["dumpfunctionpointers"] = "\ndumpfunctionpointers /  dfp : Dump all the function pointers of the current process\n"
     extusage["dumpfunctionpointers"] += "-----------------------------------------------------------------------------------\n"
@@ -448,7 +448,7 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                 b = 0
                 window.Log("-" * 77)
                 window.Log("(0x%x) No. of chunks: %d, ListEntry: 0x%08x, Size: (%d+8=%d)" % 
-		(ndx, entry.Depth, entry.addr, (ndx*8), (ndx*8+8)), address = entry.addr)
+        (ndx, entry.Depth, entry.addr, (ndx*8), (ndx*8+8)), address = entry.addr)
                 window.Log("")
                 window.Log("    List structure:")
                 window.Log("    ~~~~~~~~~~~~~~~")
@@ -494,11 +494,11 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                         if chunkSelfSize != "":
                             if graphic_structure:
                                 chunk_nodes.append(pydot.Node("size_overwrite_%x" % 
-				(a), style="filled", shape="rectangle", label=chunk_data+"\nSize overwritten..", fillcolor="red"))
+                (a), style="filled", shape="rectangle", label=chunk_data+"\nSize overwritten..", fillcolor="red"))
                             window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x, Size: %d (0x%03x)" % 
-				(b, a, (a + 0x8), chunkSelfSize, chunkSelfSize), address = a) 
+                (b, a, (a + 0x8), chunkSelfSize, chunkSelfSize), address = a) 
                             window.Log("        -> chunk size should have been %d (0x%04x)! We have a possible chunk overwrite.." % 
-				(ndx * block, ndx * block), focus=1)
+                (ndx * block, ndx * block), focus=1)
                         # else if the chunk address has been overwrtten and we couldnt read the chunks size...
                         # generally because the previous chunks flink was clobbered..
                         elif chunkSelfSize == "":
@@ -513,7 +513,7 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                         if graphic_structure:
                             chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#3366ff"))
                         window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x, Size: %d (0x%03x), Cookie: 0x%01x" % 
-			(b, a, (a + 0x8), (ndx * block), (ndx * block), chunkCookie), address = a) 
+            (b, a, (a + 0x8), (ndx * block), (ndx * block), chunkCookie), address = a) 
                             
             if graphic_structure:
                 chunk_dict[ndx] = chunk_nodes
@@ -653,20 +653,21 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
         e=entry[0]
         chunk_nodes = []
         if e[0]:
+            expected_size_freelist0 = ">1016"
+            expected_size = a * block
+            result_of_expected_size = expected_size - block
+            window.Log("")
             if len(entry[1:]) >= 1:
                 chunkNum = 0
-                expectedSize = ">1016"
-                resultOfExpectedSize = ""
+
+                # if we are not FreeList[0] and yet we have chunks
+                # 
                 if a != 0:
-                    expectedSize = a * block
-                    resultOfExpectedSize = expectedSize - block
-                    window.Log("-" * 117)
-                    window.Log("(0x%03x) - FreeLists[0x%03x] at 0x%08x | +0x4 = 0x%08x | -0x4 = 0x%08x [expected size: %s-8=%s]" % (a, a, e[0],(e[0]+0x4), (e[0]-0x4), expectedSize, resultOfExpectedSize), address = e[0])
-                    window.Log("        [FreeLists[%d].blink : 0x%08x | FreeLists[%03d].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
+                    window.Log("FreeList[0x%02x] - 0x%08x | +0x4 = 0x%08x | -0x4 = 0x%08x [expected size: %s-8=%s]" % (a, e[0],(e[0]+0x4), (e[0]-0x4), expected_size), address = e[0])
+                    window.Log("        [FreeList[0x%02x].blink : 0x%08x | FreeLists[%03d].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
                 else:
-                    window.Log("-" * 117)
-                    window.Log("(0x%03x) - FreeLists[0x%03x] at 0x%08x | +0x4 = 0x%08x | -0x4 = 0x%08x [expected size: %s]" % (a, a, e[0],(e[0]+0x4), (e[0]-0x4), expectedSize), address = e[0])
-                    window.Log("        [FreeLists[%d].blink : 0x%08x | FreeLists[%03d].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
+                    window.Log("FreeList[0x%02x] - 0x%08x | +0x4 = 0x%08x | -0x4 = 0x%08x [expected size: %s]" % (a, e[0],(e[0]+0x4), (e[0]-0x4), expected_size_freelist0), address = e[0])
+                    window.Log("        [FreeList[0x%02x].blink : 0x%08x | FreeLists[%03d].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
                          
                 # for each avaliable chunk in the freelist[] entry            
                 for fc in entry[1:]:
@@ -701,8 +702,8 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                     chunkCookie = int(binascii.hexlify(chunkCookie),16)                    
                     chunk_data = "Chunk (%d) 0x%08x\nBlink (0x%08x)\nFlink (0x%08x)" % (chunkNum, chunkAddr, chunkBlink, chunkFlink)
                     chunkNum += 1
-                    window.Log("         * Chunk [%d]: 0x%08x  [blink : 0x%08x  | flink : 0x%08x] - size: 0x%04x | calculated size: %d (0x%04x) - cookie: 0x%02x" % 
-                               (chunkNum, chunkAddr, chunkBlink, chunkFlink, sz, calc_sz, calc_sz, chunkCookie), address = chunkAddr) 
+                    window.Log("         * Chunk [%d]: 0x%08x  [blink : 0x%08x  | flink : 0x%08x] " % (chunkNum, chunkAddr, chunkBlink, chunkFlink), address = chunkAddr) 
+                    window.Log("                 [%d]: size: 0x%04x | calculated size: %d (0x%04x) - cookie: 0x%02x" % (chunkNum, sz, calc_sz, calc_sz, chunkCookie), address = chunkAddr) 
                     if graphic_structure:
                         chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#3366ff"))
                     # safe unlinking, or at least the best ill get ;)
@@ -723,6 +724,14 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                             do_heuristics(window, "freelist", chunkNum, a)
                             if graphic_structure:
                                 chunk_nodes.append(pydot.Node("flink_blink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nFlink/Blink overwrite...", fillcolor="red"))
+            
+            # if they have no chunks, print them anyway, prooves useful when performing certain attacks 
+            elif len(entry[1:]) < 1:
+                window.Log("FreeList[0x%02x] - 0x%08x | +0x4 = 0x%08x | -0x4 = 0x%08x [expected size: %s-8=%s]" % (a, e[0],(e[0]+0x4), (e[0]-0x4), expected_size, result_of_expected_size), address = e[0])
+                window.Log("        [FreeList[0x%02x].blink : 0x%08x | FreeLists[%03d].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
+            window.Log("")   
+            window.Log("-" * 94)
+                
         if graphic_structure:
             chunk_dict[a] = chunk_nodes
             freelist_nodes.append(pydot.Node("Freelist[0x%x]" % a, style="filled", shape="rectangle", fillcolor="#66FF66"))
@@ -1170,7 +1179,7 @@ def main(args):
                 show_detail = False
                 start_block = 0
                 finish_block = 0
-                filter = 0
+                chunk_filter = 0
                 for ar in args:
                     if ar == "-v":
                         show_detail = True
@@ -1183,11 +1192,11 @@ def main(args):
                     if ar == "-f":
                         if len(args) > 3:
                             if (args[args.index(ar)+1].lower() != "free" or args[args.index(ar)+1].lower() != "busy"):
-                                filter = args[args.index(ar)+1].lower()
+                                chunk_filter = args[args.index(ar)+1].lower()
                             else:
-                                return "(-) Invalid filter option! use free/busy only"
+                                return "(-) Invalid chunk_filter option! use free/busy only"
                         else:
-                            return "(-) Invalid filter option! use free/busy only"
+                            return "(-) Invalid chunk_filter option! use free/busy only"
                 window.Log("-" * 62)
                 window.Log("Dumping chunks @ heap address: 0x%08x" % (heap))
                 window.Log("Analyzing %d segments" % len(pheap.Segments))
@@ -1203,12 +1212,12 @@ def main(args):
                         if chunk.addr <= finish_block and chunk.addr >= start_block:
                             window.Log("-" * 62)
                             dumpchunk_info(chunk, show_detail, window)
-                    elif filter == "busy":
+                    elif chunk_filter == "busy":
                         # if they are busy and NOT on the lookaside..
                         if chunk.flags == 0x1 and not chunk.getflags(chunk.flags) == "B$":
                             window.Log("-" * 62)
                             dumpchunk_info(chunk, show_detail, window)
-                    elif filter == "free":
+                    elif chunk_filter == "free":
                         # if they are free and 'busy' but are on the lookaside..
                         if chunk.flags == 0x0 or chunk.getflags(chunk.flags) == "B$":
                             window.Log("-" * 62)
