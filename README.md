@@ -10,7 +10,12 @@ Currently there is full support for Windows XP. In the near future it will supoi
 Setup
 =====
 
-Copy heaper.py into your immunity debugger pycommands directory typically: 'C:\Program Files\Immunity Inc\Immunity Debugger\PyCommands\'.
+You will need to install:
+- [Graphviz](http://www.graphviz.org/Download.php)
+- [pydot](http://code.google.com/p/pydot/)
+- [pyparsing](http://sourceforge.net/projects/pyparsing/)
+
+Then once you have completed that, copy heaper.py into your immunity debugger pycommands directory typically: 'C:\Program Files\Immunity Inc\Immunity Debugger\PyCommands\'.
 
 Usage
 =====
