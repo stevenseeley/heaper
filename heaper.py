@@ -32,10 +32,12 @@ __VERSION__ = '0.01'
 DESC="""!heaper - a tool to analyse heap structures."""
 
 import immlib
+from immlib import LogBpHook
 import immutils
 import libdatatype
 import binascii
 import pydot
+import struct
 import re
 
 ##################################################################################
@@ -44,7 +46,7 @@ import re
 available_commands = [
 "dumppeb", "dp", "dumpheaps", "dh", "analyseheap", "ah", "dumpteb", "dt", "analyselal", "al", 
 "analysefreelist", "af", "analysechunks", "ac", "dumpfunctionpointers", "dfp", "help", "-h", 
-"analysesegments", "as", "-f", "-m", "-p", "freelistinuse", "fliu"]
+"analysesegments", "as", "-f", "-m", "-p", "freelistinuse", "fliu", "hook"]
 
 block = 8 # a block will always be 8 bytes
 opennewwindow = False
@@ -167,6 +169,106 @@ class set_command:
         self.usage = usage
         self.parseProc = parseProc
         self.alias = alias
+        
+# RtlFreeHeap Hook class
+FREELABEL = "RtlFreeHeap Hook"
+class RtlFreeHeapHook(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        imm = immlib.Debugger()
+        res=imm.readMemory( regs['ESP'] + 4, 0xc)
+        if len(res) != 0xc:
+            self.window.Log("(-) RtlFreeHeap: the stack seems to broken, unable to get args")
+            return 0x0
+        (heap, flags, size) = struct.unpack("LLL", res)
+        if heap == self.Heap:
+            self.window.Log("(+) RtlFreeHeap(0x%08x, 0x%08x, 0x%08x)" % (heap, flags, size)) 
+
+class RtlFreeHeapHook_ret(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        return_value = regs['EAX']
+        self.window.Log("(+) RtlFreeHeap() returned: 0x%08x" % (return_value)) 
+        self.window.Log("-" * 30)
+                     
+# RtlAllocateHeap Hook class
+ALLOCLABEL = "RtlAllocateHeap Hook"
+class RtlAllocateHeapHook(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        imm = immlib.Debugger()
+        res=imm.readMemory( regs['ESP'] + 4, 0xc)
+        if len(res) != 0xc:
+            self.window.Log("RtlAllocateHeap: ESP seems to broken, unable to get args")
+            return 0x0
+        (heap, flags, size) = struct.unpack("LLL", res)
+        if heap == self.Heap:
+            self.window.Log("(+) RtlAllocateHeap(0x%08x, 0x%08x, 0x%08x)" % (heap, flags, size)) 
+            
+class RtlAllocateHeapHook_ret(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        return_value = regs['EAX']
+        self.window.Log("(+) RtlAllocateHeap() returned: 0x%08x" % (return_value)) 
+        self.window.Log("-" * 30) 
+            
+def hook_on(imm, heap, LABEL, HeapHook_vals, HeapHook_ret, bp_address, bp_retaddress, Disable, window):
+    hookalloc_vals = imm.getKnowledge( LABEL + "_%08x_values" % heap )
+    hookalloc_ret = imm.getKnowledge( LABEL + "_%08x_ret" % heap )
+    if Disable:
+        if not hookalloc_vals:
+            window.Log("(-) Error %s: No hook for heap 0x%08x to disable" % (LABEL, heap))
+            return "No hook to disable on"
+        elif not hookalloc_ret:
+            window.Log("(-) Error %s: No hook for heap 0x%08x to disable" % (LABEL, heap))
+            return "No hook to disable on"
+        else:
+            hookalloc_vals.UnHook()
+            hookalloc_ret.UnHook()
+            window.Log("(+) UnHooked %s" % LABEL)
+            imm.forgetKnowledge( LABEL + "_%08x_values" % heap )
+            imm.forgetKnowledge( LABEL + "_%08x_ret" % heap )
+            return "Unhooked" 
+    else:
+        if not hookalloc_vals:
+            hookalloc_vals= HeapHook_vals( heap , window)
+            hookalloc_vals.add( LABEL + "_%08x_values" % heap, bp_address)
+            #hookalloc.add( LABEL + "_%08x" % heap, bp_retaddr)
+            
+            window.Log("(+) Placed %s to retrieve the variables" % LABEL)
+            imm.addKnowledge( LABEL + "_%08x_values" % heap, hookalloc_vals )
+        else:
+            window.Log("(?) HookAlloc for heap 0x%08x is already running" % heap)
+        if not hookalloc_ret:
+            hookalloc_ret= HeapHook_ret( heap , window)
+            hookalloc_ret.add( LABEL + "_%08x_ret" % heap, bp_retaddress)
+            #hookalloc.add( LABEL + "_%08x" % heap, bp_retaddr)
+            
+            window.Log("(+) Placed %s to retrieve the return value" % LABEL)
+            imm.addKnowledge( LABEL + "_%08x_ret" % heap, hookalloc_ret )            
+        else:
+            window.Log("(?) HookAlloc for heap 0x%08x is already running" % heap)
+        return "Hooked"
 
 # banners, i know huh pretty lame
 def banner(imm):
@@ -203,6 +305,7 @@ def usage(imm):
     imm.log("analysesegments <heap> / as <heap>    : analyse a particular heap's segments")
     imm.log("analysechunks <heap> / ac <heap>      : analyse a particular heap's chunks")
     imm.log("freelistinuse <heap> / fliu <heap>    : analyse/patch the FreeListInUse structure")
+    imm.log("hook <heap> / hook -h <func>          : Hook various functions that create/destroy/manipulate a heap")
     imm.log("")
     imm.log("Want more info about a given command? Run !heaper help <command>",highlight=1)
     imm.log("")
@@ -217,6 +320,23 @@ def get_extended_usage():
     extusage["dumppeb"] = "\ndumppeb / dp : Return the PEB entry address\n"
     extusage["dumppeb"] += "---------------------------------------------\n"
     extusage["dumppeb"] += "Use -m to view the PEB management structure\n"
+    extusage["hook"] = "\nhook <heap> / hook : Hook various functions that create/destroy/manipulate a heap\n"
+    extusage["hook"] += "---------------------------------------------\n"
+    extusage["hook"] += "Use -h to hook any function.\n"
+    extusage["hook"] += "Use -u to unhook any function.\n"
+    extusage["hook"] += "Available functions to hook are: \n"
+    extusage["hook"] += "- RtlAllocateHeap()              [alloc] (working)\n"
+    extusage["hook"] += "- RtlFreeHeap()                  [free] (working)\n"
+    extusage["hook"] += "- RtlCreateHeap()                [create] (dev)\n"
+    extusage["hook"] += "- RtlDestroyHeap()               [destroy] (dev)\n"
+    extusage["hook"] += "- RtlReAllocateHeap()            [realloc] (dev)\n"
+    extusage["hook"] += "- RtlSizeHeap()                  [size] (dev)\n"
+    extusage["hook"] += "- RtlInitializeCriticalSection() [initialcs] (dev)\n"
+    extusage["hook"] += "- RtlDeleteCriticalSection()     [deletecs] (dev)\n"
+    extusage["hook"] += "- Hook all!                      [all] (dev)\n"
+    extusage["hook"] += "eg: !heaper hook 0x00150000 -f realloc\n"
+    extusage["hook"] += "eg: !heaper hook -u all\n"
+    extusage["hook"] += "eg: !heaper hook -f create\n"
     extusage["dumpteb"] = "\ndumpteb / dt : List all of the TEB entry addresses\n"
     extusage["dumpteb"] += "--------------------------------------------------------\n"
     extusage["dumpheaps"] = "\ndumpheaps / dh : Dump all the heaps for a given process\n"
@@ -265,7 +385,8 @@ def setUpArgs():
     cmds["analysefreelist"] = set_command("analysefreelist", "analyse a particular heap's freelist",get_extended_usage()["analysefreelist"], "af")
     cmds["analysechunks"] = set_command("analysechunks", "analyse a particular heap's list of chunks",get_extended_usage()["analysechunks"], "ac")
     cmds["analysesegments"] = set_command("analysesegments", "analyse a particular heap's segment(s)",get_extended_usage()["analysesegments"], "as")
-    cmds["freelistinuse"] = set_command("freelistinuse", "aanalyse/patch the FreeListInUse structure",get_extended_usage()["freelistinuse"], "fliu")
+    cmds["freelistinuse"] = set_command("freelistinuse", "analyse/patch the FreeListInUse structure",get_extended_usage()["freelistinuse"], "fliu")
+    cmds["hook"] = set_command("hook", "Hook various functions that create/destroy/manipulate a heap",get_extended_usage()["hook"], "hook")
     return cmds
 
 # TODO: build heuristics to detect exploitable paths...
@@ -405,6 +526,9 @@ def dump_peb(imm, window, dump_management=False):
     else:
         window.Log("PEB is located at 0x%08x" % peb,peb)
         return "PEB is located at 0x%08x" % peb
+
+
+
 
 def dump_teb(imm, window):
     currenttid = imm.getThreadId()
@@ -614,7 +738,8 @@ def set_FreeListInUse(value,win,pHeap,imm,heapbase):
     imm.writeLong( heapbase+0x158+0x08, fliu_2 )
     imm.writeLong( heapbase+0x158+0x0c, fliu_3 )
     
-    
+# need a better way to do this..
+# this will do for now.
 def get_heap_instance(heap, imm):
     try:
         heap = int(heap,16)
@@ -784,7 +909,6 @@ def dumpchunk_info(chunk, show_detail, window):
     window.Log("    -> size: 0x%08x  (8 * 0x%04x = 0x%04x, decimal: %d)" % (chunk.usize, chunk.size, chunk.usize, chunk.usize) )
     window.Log("    -> prevsize: 0x%08x (%04x)" % (chunk.upsize, chunk.psize))
     window.Log("    -> flags: 0x%04x (%s)" % (chunk.flags, chunk.getflags(chunk.flags)))
-    # if we have a free chunk
     
     # chunks on the lookaside will "appear" busy
     if chunk.getflags(chunk.flags) == "B$":
@@ -805,6 +929,8 @@ def dumpchunk_info(chunk, show_detail, window):
 
 # TODO: detect where the function pointer was called from
 # may require a new function.
+
+
 
 def dump_function_pointers(window, imm, writable_segment, patch=False, restore=False, address_to_patch=False):
     j = 0
@@ -1089,6 +1215,10 @@ def main(args):
                     usageText = cmds["freelistinuse"].usage.split("\n")
                     for line in usageText:
                         imm.log(line)
+                elif args[1].lower().strip() == "hook":
+                    usageText = cmds["hook"].usage.split("\n")
+                    for line in usageText:
+                        imm.log(line)
                 return "(+) Good luck!"
             else:
                 usage(imm)
@@ -1108,6 +1238,7 @@ def main(args):
                 imm.addKnowledge(tag, window, force_add = 1)
         win_banner(window)
         
+    # functions are only require one argument
     if len(args) == 1:
         if args[0].lower().strip() in available_commands:
             if args[0].lower().strip() == "dumpheaps" or args[0].lower().strip() == "dh":
@@ -1134,8 +1265,7 @@ def main(args):
                 window.Log("Dumping function pointers from the %s process" % imm.getDebuggedName())
                 window.Log("-" * 60)
                 dump_function_pointers(window, imm, writable_segment)
-
-                    
+           
             else:
                 return "Invalid number of arguments"
         else:
@@ -1176,7 +1306,11 @@ def main(args):
             
             # analyse the lookaside list
             elif args[0].lower().strip() == "analyselal" or args[0].lower().strip() == "al":
-                pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                try:
+                    pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                except:
+                    window.Log("Invalid heap address!")
+                    return "Invalid heap address!"
                 if imm.getOsVersion() == "xp":
                     FrontEndHeap = imm.readMemory(heap+0x580, 4)
                     FrontEndHeap = reverse(FrontEndHeap)
@@ -1193,7 +1327,11 @@ def main(args):
             
             # analyse freelists
             elif args[0].lower().strip() == "analysefreelist" or args[0].lower().strip() == "af":
-                pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                try:
+                    pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                except:
+                    window.Log("Invalid heap address!")
+                    return "Invalid heap address!"
                 if imm.getOsVersion() == "xp":
                     window.Log("-" * 62)
                     window.Log("FreeList structure @ 0x%08x" % (heap+0x178))
@@ -1213,23 +1351,35 @@ def main(args):
                         
             # analyse FreelistInUse
             elif args[0].lower().strip() == "freelistinuse" or args[0].lower().strip() == "fliu":
-                pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                try:
+                    pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                except:
+                    window.Log("Invalid heap address!")
+                    return "Invalid heap address!"
+                #window.Log("test: %x" % heap)
                 window.Log("")
-                window.Log("(+) Dumping the FreeListInUse for heap 0x%08x" % heap)
+                
                 if len(args) > 2:
                     if args[2] == "-p":
                         window.Log("")
                         if args[3] and int(args[3],16) in range(0x00,0x7f): 
                             set_FreeListInUse(int(args[3],16),window,pheap,imm,heap)
-                            window.Log("(+) Patched FreeList[%x]'s FreeListInUse!" % int(args[3],16))
+                            window.Log("(+) Patched FreeList[%x]'s FreeListInUse entry!" % int(args[3],16))
+                            window.Log("(+) Just run: '!heaper fliu 0x%08x' to see the changes" % heap)
                         else:
                             window.Log("(-) Failed to patch FreeListInUse for heap 0x%08x" % heap)
-                    
-                dump_FreeListInUse(pheap, window)
+                      
+                else:
+                    window.Log("(+) Dumping the FreeListInUse for heap 0x%08x" % heap)
+                    dump_FreeListInUse(pheap, window)
                 
             # analyse segment chunks
             elif args[0].lower().strip() == "analysechunks" or args[0].lower().strip() == "ac":
-                pheap, heap = get_heap_instance(args[1].lower().strip(), imm)               
+                try:
+                    pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                except:
+                    window.Log("Invalid heap address!")
+                    return "Invalid heap address!"              
                 show_detail = False
                 start_block = 0
                 finish_block = 0
@@ -1342,7 +1492,63 @@ def main(args):
                 pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
                 dump_segment_structure(pheap, window, imm, heap)
                 
+            # TODO: finish hooking..
+            elif args[0].lower().strip() == "hook":
+                try:
+                    pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                except:
+                    window.Log("Invalid heap address!")
+                    return "Invalid heap address!"
+                window.Log("")
+                valid_functions = ["alloc", "free", "create","destroy","realloc","size","initialcs","destroycs","all"]
+                Disable = False
+                AllocFlag = False
+                FreeFlag = False
+                if len(args) > 2:
+                    #window.Log("%d" % len(args))
+                    if len(args) == 4:
+                        if args[2] == "-h":
+                            if args[3].lower().strip() in valid_functions:
+                                #window.Log("function: %s" % args[3].lower().strip())
+                                if args[3].lower().strip() == "alloc":
+                                    AllocFlag = True
+                                elif args[3].lower().strip() == "free":
+                                    FreeFlag = True
+                                elif args[3].lower().strip() == "all":
+                                    window.Log("hook all")
+                            else:
+                                window.Log("(-) Please specify a VALID function to hook")
+                        elif args[2] == "-u":
+                            if args[3].lower().strip() in valid_functions:
+                                Disable = True
+                                #window.Log("function: %s" % args[3].lower().strip())
+                                if args[3].lower().strip() == "alloc":
+                                    AllocFlag = True
+                                elif args[3].lower().strip() == "free":
+                                    FreeFlag = True
+                                elif args[3].lower().strip() == "all":
+                                    window.Log("unhook all")
+                        else:
+                            return "(-) Invalid argument %s" % args[2]
+                        
+                    else:
+                        window.Log("(-) Please specify a function to hook/unhook using -h/-u")
+                        return "(-) Please specify a function to hook/unhook using -h/-u"
 
+                if AllocFlag:
+                    allocaddr = imm.getAddress("ntdll.RtlAllocateHeap" )
+                    retaddr = allocaddr+0x117 # retn 0xc
+                    hook_output = ("(+) %s RtlAllocateHeap() for heap 0x%08x" % 
+                    (hook_on(imm, heap, ALLOCLABEL, RtlAllocateHeapHook, RtlAllocateHeapHook_ret, allocaddr, retaddr, Disable, window), heap))
+                    window.Log(hook_output)
+                    return hook_output
+                elif FreeFlag:
+                    freeaddr = imm.getAddress("ntdll.RtlFreeHeap" )
+                    retaddr = freeaddr+0x130 # retn 0xc
+                    hook_output = ("(+) %s RtlFreeHeap() for heap 0x%08x" % 
+                    (hook_on(imm, heap, FREELABEL, RtlFreeHeapHook, RtlFreeHeapHook_ret, freeaddr, retaddr, Disable, window), heap))
+                    window.Log(hook_output)
+                
         # more than one command and that we cant understand
         else:
             return usage(imm)
