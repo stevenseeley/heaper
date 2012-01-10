@@ -385,7 +385,7 @@ def get_extended_usage():
     extusage["hook"] += "- RtlAllocateHeap()              [alloc] (working)\n"
     extusage["hook"] += "- RtlFreeHeap()                  [free] (working)\n"
     extusage["hook"] += "- RtlCreateHeap()                [create] (working)\n"
-    extusage["hook"] += "- RtlDestroyHeap()               [destroy] (dev)\n"
+    extusage["hook"] += "- RtlDestroyHeap()               [destroy] (working)\n"
     extusage["hook"] += "- RtlReAllocateHeap()            [realloc] (dev)\n"
     extusage["hook"] += "- RtlSizeHeap()                  [size] (dev)\n"
     extusage["hook"] += "- RtlInitializeCriticalSection() [initialcs] (dev)\n"
@@ -583,9 +583,6 @@ def dump_peb(imm, window, dump_management=False):
     else:
         window.Log("PEB is located at 0x%08x" % peb,peb)
         return "PEB is located at 0x%08x" % peb
-
-
-
 
 def dump_teb(imm, window):
     currenttid = imm.getThreadId()
@@ -1002,8 +999,6 @@ def dumpchunk_info(chunk, show_detail, window):
 
 # TODO: detect where the function pointer was called from
 # may require a new function.
-
-
 
 def dump_function_pointers(window, imm, writable_segment, patch=False, restore=False, address_to_patch=False):
     j = 0
@@ -1669,8 +1664,7 @@ def main(args):
                     window.Log(hook_output)
                     window.Log("-" * 30)
                     return hook_output
-                    
-                # TODO: hooking DestoryHeap needs to heap address    
+                # TODO: hooking RtlReAllocateHeap, RtlSizeHeap, RtlInitializeCriticalSection, RtlDeleteCriticalSection    
                             
         # more than one command and that we cant understand
         else:
