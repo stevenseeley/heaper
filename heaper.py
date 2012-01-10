@@ -55,6 +55,7 @@ tag = "display_box"
 ALLOCLABEL = "RtlAllocateHeap Hook"
 FREELABEL = "RtlFreeHeap Hook"
 CREATELABEL = "RtlCreateHeap Hook"
+DESTROYLABEL = "RtlDestroyHeap Hook"
 ##################################################################################
 
 
@@ -260,6 +261,34 @@ class RtlCreateHeap_ret(LogBpHook):
         """This will be executed when hooktype happens"""
         return_value = regs['EAX']
         self.window.Log("(+) RtlCreateHeap() returned: 0x%08x" % (return_value)) 
+        self.window.Log("-" * 30)
+        
+class RtlDestroyHeap(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        imm = immlib.Debugger()
+        res=imm.readMemory( regs['ESP'] + 4, 0x4)
+        if len(res) != 0x4:
+            self.window.Log("(-) RtlDestroyHeap: the stack seems to broken, unable to get args")
+            return 0x0
+        (heap) = struct.unpack("L", res)
+        self.window.Log("(+) RtlDestroyHeap(0x%08x)" % (heap))
+
+class RtlDestroyHeap_ret(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        return_value = regs['EAX']
+        self.window.Log("(+) RtlDestroyHeap() returned: 0x%08x" % (return_value)) 
         self.window.Log("-" * 30)
             
 def hook_on(imm, heap, LABEL, HeapHook_vals, HeapHook_ret, bp_address, bp_retaddress, Disable, window):
@@ -1545,8 +1574,8 @@ def main(args):
                 AllocFlag = False
                 FreeFlag = False
                 CreateFlag = False
+                DestroyFlag = False
                 if len(args) > 2:
-                    #window.Log("%d" % len(args))
                     if len(args) == 4:
                         try:
                             pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -1555,13 +1584,16 @@ def main(args):
                             return "Invalid heap address!"
                         if args[2] == "-h":
                             if args[3].lower().strip() in valid_functions:
-                                #window.Log("function: %s" % args[3].lower().strip())
                                 if args[3].lower().strip() == "alloc":
                                     AllocFlag = True
                                 elif args[3].lower().strip() == "free":
                                     FreeFlag = True
                                 elif args[3].lower().strip() == "create":
-                                    CreateFlag = True
+                                    window.Log("(-) You do not need to specify a heap to hook RtlCreateHeap()!")
+                                    return "You do not need to specify a heap to hook RtlCreateHeap()!"
+                                elif args[3].lower().strip() == "destroy":
+                                    window.Log("(-) You do not need to specify a heap to hook RtlDestroyHeap()!")
+                                    return "You do not need to specify a heap to hook RtlDestroyHeap()!" 
                                 elif args[3].lower().strip() == "all":
                                     window.Log("hook all")
                             else:
@@ -1569,25 +1601,33 @@ def main(args):
                         elif args[2] == "-u":
                             if args[3].lower().strip() in valid_functions:
                                 Disable = True
-                                #window.Log("function: %s" % args[3].lower().strip())
                                 if args[3].lower().strip() == "alloc":
                                     AllocFlag = True
                                 elif args[3].lower().strip() == "free":
                                     FreeFlag = True
                                 elif args[3].lower().strip() == "create":
-                                    CreateFlag = True
+                                    window.Log("(-) You do not need to specify a heap to unhook RtlCreateHeap()!")
+                                    return "You do not need to specify a heap to unhook RtlCreateHeap()!"
+                                elif args[3].lower().strip() == "destroy":
+                                    window.Log("(-) You do not need to specify a heap to unhook RtlDestroyHeap()!")
+                                    return "You do not need to specify a heap to unhook RtlDestroyHeap()!"                        
                                 elif args[3].lower().strip() == "all":
                                     window.Log("unhook all")
                         else:
                             return "(-) Invalid argument %s" % args[2]
-                        
+                    
                     elif args[1].lower().strip() == "-h":
                         if args[2].lower().strip() == "create":
                             CreateFlag = True
+                        elif args[2].lower().strip() == "destroy":
+                            DestroyFlag = True
+                            
                     elif args[1].lower().strip() == "-u":
                         Disable = True
                         if args[2].lower().strip() == "create":
                             CreateFlag = True
+                        elif args[2].lower().strip() == "destroy":
+                            DestroyFlag = True
                     else:
                         window.Log("%d" % len(args))
                         window.Log("(-) Please specify a function to hook/unhook using -h/-u")
@@ -1620,6 +1660,16 @@ def main(args):
                     window.Log(hook_output)
                     window.Log("-" * 30)
                     return hook_output
+                elif DestroyFlag:
+                    destoryaddr = imm.getAddress("ntdll.RtlDestroyHeap")
+                    retaddr = destoryaddr+0xd9
+                    window.Log("-" * 30)
+                    hook_output = ("(+) %s RtlDestroyHeap() for heap 0x%08x" % 
+                    (hook_on(imm, 0, DESTROYLABEL, RtlDestroyHeap, RtlDestroyHeap_ret, destoryaddr, retaddr, Disable, window), 0))
+                    window.Log(hook_output)
+                    window.Log("-" * 30)
+                    return hook_output
+                    
                 # TODO: hooking DestoryHeap needs to heap address    
                             
         # more than one command and that we cant understand
