@@ -362,9 +362,9 @@ def get_extended_usage():
     extusage["hook"] += "- RtlInitializeCriticalSection() [initialcs] (dev)\n"
     extusage["hook"] += "- RtlDeleteCriticalSection()     [deletecs] (dev)\n"
     extusage["hook"] += "- Hook all!                      [all] (dev)\n"
-    extusage["hook"] += "eg: !heaper hook 0x00150000 -f realloc\n"
+    extusage["hook"] += "eg: !heaper hook 0x00150000 -h realloc\n"
     extusage["hook"] += "eg: !heaper hook -u all\n"
-    extusage["hook"] += "eg: !heaper hook -f create\n"
+    extusage["hook"] += "eg: !heaper hook -h create\n"
     extusage["dumpteb"] = "\ndumpteb / dt : List all of the TEB entry addresses\n"
     extusage["dumpteb"] += "--------------------------------------------------------\n"
     extusage["dumpheaps"] = "\ndumpheaps / dh : Dump all the heaps for a given process\n"
@@ -611,12 +611,12 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                 window.Log("    ~~~~~~~")                
                 for a in entry.getList():
                     # get the chunks self size
-                    chunkSelfSize = ""
+                    chunk_read_self_size = ""
                     try:
-                        chunkSelfSize = imm.readMemory(a, 0x2)
-                        chunkSelfSize = reverse(chunkSelfSize)
-                        chunkSelfSize = int(binascii.hexlify(chunkSelfSize),16)
-                        chunkSelfSize = chunkSelfSize*8
+                        chunk_read_self_size = imm.readMemory(a, 0x2)
+                        chunk_read_self_size = reverse(chunk_read_self_size)
+                        chunk_read_self_size = int(binascii.hexlify(chunk_read_self_size),16)
+                        chunk_read_self_size = chunk_read_self_size*8
                     except:
                         pass
                         
@@ -630,41 +630,57 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                         pass
                     
                     # validate the flink!
-                    flink_overwrite = False
+                    chunk_overwrite = False
                     try:
                         flink = imm.readMemory(a+0x8, 0x4)
                         flink = reverse(flink)
                         flink = int(binascii.hexlify(flink),16)
                     except:
-                        flink_overwrite = True
-                    chunk_data = ("chunk (%d) 0x%08x \nFlink 0x%08x" % (b, a, (a + 0x8)))
+                        chunk_overwrite = True
+                    if not chunk_overwrite:
+                        chunk_data = ("chunk (%d) 0x%08x \nFlink 0x%08x-0x08" % (b, a, (flink)))
+                    elif chunk_overwrite:
+                        chunk_data = ("chunk (%d) 0x%08x \nFlink ??0x%08x??" % (b, a, (a + 0x8)))
 
                     # else the expected chunk size is not the same as the read in chunk..
-                    if chunkSelfSize != (ndx * block):
+                    if chunk_read_self_size != (ndx * block):
                         # if the size has been overwritten.....
-                        if chunkSelfSize != "":
+                        if chunk_read_self_size != "":
                             if graphic_structure:
                                 chunk_nodes.append(pydot.Node("size_overwrite_%x" % 
                                 (a), style="filled", shape="rectangle", label=chunk_data+"\nSize overwritten..", fillcolor="red"))
-                            window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x, Size: %d (0x%03x)" % 
-                            (b, a, (a + 0x8), chunkSelfSize, chunkSelfSize), address = a) 
-                            window.Log("        -> chunk size should have been %d (0x%04x)! We have a possible chunk overwrite.." % 
-                            (ndx * block, ndx * block), focus=1)
-                        # else if the chunk address has been overwrtten and we couldnt read the chunks size...
-                        # generally because the previous chunks flink was clobbered..
-                        elif chunkSelfSize == "":
+                            if not chunk_overwrite:
+                                window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x, Size: %d (0x%03x)" % 
+                                (b, a, (flink), chunk_read_self_size, chunk_read_self_size), address = a) 
+                                window.Log("        -> chunk size should have been %d (0x%04x)! We have a possible chunk overwrite.." % 
+                                (ndx * block, ndx * block), focus=1)
+                            elif chunk_overwrite:
+                                # we cant read what flink is so its a ??
+                                window.Log("    chunk [%d]: 0x%08x, Flink: ??0x%08x??, Size: ? " % (b, a, (a + 0x8)), address = a) 
+                                window.Log("        -> failed to read chunk @ 0x%08x!" % a, address = a)
+                        # else if the chunk address has been overwrtten and we couldnt read the chunks size due
+                        # to a dodgy chunk header. This is generally because the previous chunks flink was clobbered..
+                        elif chunk_read_self_size == "":
                             # just to ensure the flink was owned...
-                            if flink_overwrite:
-                                window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x, Size: ? " % (b, a, (a + 0x8)), address = a) 
+                            if not chunk_overwrite:
+                                window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x, Size: %d (0x%03x)" % 
+                                (b, a, (flink), chunk_read_self_size, chunk_read_self_size), address = a)                           
+                            if chunk_overwrite:
+                                window.Log("    chunk [%d]: 0x%08x, Flink: ??0x%08x??, Size: ? " % (b, a, (a + 0x8)), address = a) 
                                 window.Log("        -> failed to read chunk @ 0x%08x!" % a, address = a)
                                 if graphic_structure:
-                                    chunk_nodes.append(pydot.Node("flink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nFlink overwrite...", fillcolor="red"))
-                    elif chunkSelfSize == (ndx * block):
+                                    chunk_nodes.append(pydot.Node("chunk_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nFlink overwrite...", fillcolor="red"))
+                    elif chunk_read_self_size == (ndx * block):
                         b += 1
                         if graphic_structure:
                             chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#3366ff"))
-                        window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x, Size: %d (0x%03x), Cookie: 0x%01x" % 
-                        (b, a, (a + 0x8), (ndx * block), (ndx * block), chunkCookie), address = a) 
+                        if not chunk_overwrite:
+                            window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x-0x8, Size: %d (0x%03x), Cookie: 0x%01x" % 
+                                       (b, a, (flink), (ndx * block), (ndx * block), chunkCookie), address = a) 
+                        elif chunk_overwrite:
+                            window.Log("    chunk [%d]: 0x%08x, Flink: ??0x%08x??, Size: %d (0x%03x), Cookie: 0x%01x" % 
+                                       (b, a, (a+0x8), (ndx * block), (ndx * block), chunkCookie), address = a)   
+                            window.Log("        -> failed to read chunk @ 0x%08x!" % a, address = a)              
                 window.Log("-" * 77)        
             if graphic_structure:
                 chunk_dict[ndx] = chunk_nodes

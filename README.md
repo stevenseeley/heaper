@@ -23,11 +23,12 @@ Usage
 
 simply start heaper by executing '!heaper' in Immunity Debuggers command window.
 
-Screenshot
-==========
+Screenshots
+===========
 
 ![heap usage](https://github.com/mrmee/heaper/raw/master/heaper_usage.png "heaper usage")
 ![heaper hooking RtlAllocateHeap](https://github.com/mrmee/heaper/raw/master/heaper_example.png "heaper hooking RtlAllocateHeap")
+![heaper viewing the lookaside[0x123]](https://github.com/mrmee/heaper/raw/master/heaper_graphing.png "heaper viewing the lookaside[0x123]")
 
 License
 =======
