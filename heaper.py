@@ -808,6 +808,46 @@ def set_FreeListInUse(value,win,pHeap,imm,heapbase):
     imm.writeLong( heapbase+0x158+0x08, fliu_2 )
     imm.writeLong( heapbase+0x158+0x0c, fliu_3 )
     
+    
+def dump_HeapCache_bitmap(pheap, window):
+    ret = []
+    bitblocks = ""
+    HeapCache_index = 0x80
+    for a in range(0, pheap.HeapCache.NumBuckets/32/4):
+        ret.append(pheap.decimal2binary(pheap.HeapCache.Bitmask[a]))
+        if a%2:
+            bitblocks += "%s" % str("".join(ret) )
+            ret = []
+    for bit in bitblocks:
+        window.Log("bucket[0x%03x] = %d" % (HeapCache_index,int(bit)))
+        HeapCache_index += 0x1
+
+# dump the HeapCache
+# TODO: graph this structure
+# validation is already done when iterating over FreeList[0] (i need to double check this though)
+def dump_HeapCache(pheap,window,imm):
+    for a in range(0, pheap.HeapCache.NumBuckets):
+        if pheap.HeapCache.Buckets[a]:
+            # assumed size
+            size = (a+0x80-0x1) * block
+            try:
+                flink = imm.readMemory(pheap.HeapCache.Buckets[a]+0x8,0x4)
+                (flink) = struct.unpack("L", flink)
+            except:
+                flink = None
+            try:
+                blink = imm.readMemory(pheap.HeapCache.Buckets[a]+0xc,0x4)
+                (blink) = struct.unpack("L", blink)
+            except:
+                blink = None
+            if flink != None and blink != None:
+                window.Log("HEAP_CACHE[0x%03x] = 0x%08x (flink: 0x%08x, blink: 0x%08x, size: 0x%x - %d)" % 
+                (a+0x80, pheap.HeapCache.Buckets[a], flink[0], blink[0], size, size), address = pheap.HeapCache.Buckets[a])
+            else:
+                # tell the user something is funky with flink/blink
+                window.Log("HEAP_CACHE[0x%03x] = 0x%08x (size: 0x%x - %d)" % 
+                (a+0x80, pheap.HeapCache.Buckets[a], size, size), address = pheap.HeapCache.Buckets[a])                    
+    
 # need a better way to do this..
 # this will do for now.
 def get_heap_instance(heap, imm):
@@ -827,7 +867,6 @@ def dump_FreeListInUse(pheap, window):
     window.Log("")
     window.Log("FreeListInUse:")
     window.Log("--------------")
-    window.Log("")
     for b in bits:
         if i == 0:
             window.Log("FreeList[0x%x] = NA" % (i))
@@ -1059,6 +1098,7 @@ def dump_function_pointers(window, imm, writable_segment, patch=False, restore=F
         
     return "(+) Dumped all IAT pointers from %s" % imm.getDebuggedName()    
 
+# TODO: tidy up with struct (shorten/optimize the code)
 def dump_segment_structure(pheap, window, imm, heap):
     for segment in pheap.Segments:
         window.Log("")
@@ -1083,12 +1123,14 @@ def dump_segment_structure(pheap, window, imm, heap):
         heap_ = int(binascii.hexlify(heap_),16)      
                                     
         LargestUncommitedRange = imm.readMemory(segment.BaseAddress+0x14, 4)
-        LargestUncommitedRange = reverse(LargestUncommitedRange)
-        LargestUncommitedRange = int(binascii.hexlify(LargestUncommitedRange),16)
+        LargestUncommitedRange = struct.unpack("L", LargestUncommitedRange)[0]
+        #LargestUncommitedRange = reverse(LargestUncommitedRange)
+        #LargestUncommitedRange = int(binascii.hexlify(LargestUncommitedRange),16)
                     
         BaseAddress = imm.readMemory(segment.BaseAddress+0x18, 4)
-        BaseAddress = reverse(BaseAddress)
-        BaseAddress = int(binascii.hexlify(BaseAddress),16) 
+        BaseAddress = struct.unpack("L", BaseAddress)[0]
+        #BaseAddress = reverse(BaseAddress)
+        #BaseAddress = int(binascii.hexlify(BaseAddress),16) 
                     
         NumberOfPages = imm.readMemory(segment.BaseAddress+0x1c, 4)
         NumberOfPages = reverse(NumberOfPages)
@@ -1407,13 +1449,24 @@ def main(args):
                     window.Log("-" * 62)
                     if graphic_structure:
                         if custfilename:
-                                
                             dump_freelist(imm, pheap, window, heap, graphic_structure, filename)
                         else:
                             dump_freelist(imm, pheap, window, heap, graphic_structure)
                     else:
                         dump_freelist(imm, pheap, window, heap, graphic_structure)
                     dump_FreeListInUse(pheap, window)
+                    
+                    # HeapCache
+                    if pheap.HeapCache:
+                        window.Log("")
+                        window.Log("HeapCache")
+                        window.Log("-----------------")
+                        dump_HeapCache(pheap,window,imm)
+                        window.Log("")
+                        window.Log("HeapCache Bitmap:")
+                        window.Log("-----------------")
+                        dump_HeapCache_bitmap(pheap, window)
+
                     # do vista and windows 7 freelist analyse?
                 else:
                     window.Log("(-) Freelist analyse not supported under Vista and above")
