@@ -46,7 +46,7 @@ import re
 available_commands = [
 "dumppeb", "dp", "dumpheaps", "dh", "analyseheap", "ah", "dumpteb", "dt", "analyselal", "al", 
 "analysefreelist", "af", "analysechunks", "ac", "dumpfunctionpointers", "dfp", "help", "-h", 
-"analysesegments", "as", "-f", "-m", "-p", "freelistinuse", "fliu", "hook"]
+"analysesegments", "as", "-f", "-m", "-p", "freelistinuse", "fliu", "hook", "analyseheapcache","ahc"]
 
 block = 8 # a block will always be 8 bytes
 opennewwindow = False
@@ -361,6 +361,7 @@ def usage(imm):
     imm.log("analysefreelist <heap> / af <heap>    : analyse a particular heap's freelist")
     imm.log("analysesegments <heap> / as <heap>    : analyse a particular heap's segments")
     imm.log("analysechunks <heap> / ac <heap>      : analyse a particular heap's chunks")
+    imm.log("analyseheapcache <heap> / ahc <heap>  : analyse a particular heap's cache (FreeList[0])")
     imm.log("freelistinuse <heap> / fliu <heap>    : analyse/patch the FreeListInUse structure")
     imm.log("hook <heap> / hook -h <func>          : Hook various functions that create/destroy/manipulate a heap")
     imm.log("")
@@ -418,7 +419,11 @@ def get_extended_usage():
     extusage["analysefreelist"] += "Use -f to specify a filename for the graph\n"
     extusage["analysesegments"] = "\nanalysesegment(s) <heap> / as <heap> : Analyse a particular heap's segment structure(s)\n"
     extusage["analysesegments"] += "------------------------------------------------------------------------------------\n"   
-    extusage["analysesegments"] += "Use -g to view a graphical representation of the freelist\n"
+    
+    extusage["analyseheapcache"] = "\nanalyseheapcache <heap> / ahc <heap> : Analyse a particular heap's cache (FreeList[0])\n"
+    extusage["analyseheapcache"] += "------------------------------------------------------------------------------------\n"   
+    extusage["analyseheapcache"] += "Use -g to view a graphical representation of the heap cache (dev)\n"
+    
     extusage["analysechunks"] = "\nanalysechunks <heap> / ac <heap> : Analyse a particular heap's chunks\n"
     extusage["analysechunks"] += "---------------------------------------------------------------------\n"
     extusage["analysechunks"] += "Use -r <start address> <end address> to view all the chunks between those ranges\n"
@@ -442,6 +447,7 @@ def setUpArgs():
     cmds["analysefreelist"] = set_command("analysefreelist", "analyse a particular heap's freelist",get_extended_usage()["analysefreelist"], "af")
     cmds["analysechunks"] = set_command("analysechunks", "analyse a particular heap's list of chunks",get_extended_usage()["analysechunks"], "ac")
     cmds["analysesegments"] = set_command("analysesegments", "analyse a particular heap's segment(s)",get_extended_usage()["analysesegments"], "as")
+    cmds["analyseheapcache"] = set_command("analyseheapcache", "analyse a particular heap's cache (FreeList[0])",get_extended_usage()["analyseheapcache"], "ahc")
     cmds["freelistinuse"] = set_command("freelistinuse", "analyse/patch the FreeListInUse structure",get_extended_usage()["freelistinuse"], "fliu")
     cmds["hook"] = set_command("hook", "Hook various functions that create/destroy/manipulate a heap",get_extended_usage()["hook"], "hook")
     return cmds
@@ -822,6 +828,33 @@ def dump_HeapCache_bitmap(pheap, window):
         window.Log("bucket[0x%03x] = %d" % (HeapCache_index,int(bit)))
         HeapCache_index += 0x1
 
+
+def dump_HeapCache_struc(pheap, window):
+    window.Log("-" * 45)
+    window.Log("HeapCache structure @ 0x%08x (unofficial)" % (pheap.HeapCache.addr),pheap.HeapCache.addr)
+    window.Log("-" * 45)
+    window.Log("")
+    window.Log("+0x000 NumBuckets            : 0x%08x" % pheap.HeapCache.NumBuckets, pheap.HeapCache.NumBuckets)                       
+    window.Log("+0x004 CommittedSize         : 0x%08x" % pheap.HeapCache.CommittedSize, pheap.HeapCache.CommittedSize)
+    window.Log("+0x008 CounterFrequency      : 0x%08x" % pheap.HeapCache.CounterFrequency, pheap.HeapCache.CounterFrequency)
+    window.Log("+0x010 AverageAllocTime      : 0x%08x" % pheap.HeapCache.AverageAllocTime, pheap.HeapCache.AverageAllocTime)
+    window.Log("+0x018 AverageFreeTime       : 0x%08x" % pheap.HeapCache.AverageFreeTime, pheap.HeapCache.AverageFreeTime)
+    window.Log("+0x020 SampleCounter         : 0x%08x" % pheap.HeapCache.SampleCounter, pheap.HeapCache.SampleCounter)
+    window.Log("+0x024 field_24              : 0x%08x" % pheap.HeapCache.field_24, pheap.HeapCache.field_24)
+    window.Log("+0x028 AllocTimeRunningTotal : 0x%08x" % pheap.HeapCache.AllocTimeRunningTotal, pheap.HeapCache.AllocTimeRunningTotal)
+    window.Log("+0x030 FreeTimeRunningTotal  : 0x%08x" % pheap.HeapCache.FreeTimeRunningTotal, pheap.HeapCache.FreeTimeRunningTotal)
+    window.Log("+0x038 AllocTimeCount        : 0x%08x" % pheap.HeapCache.AllocTimeCount, pheap.HeapCache.AllocTimeCount)
+    window.Log("+0x03c FreeTimeCount         : 0x%08x" % pheap.HeapCache.FreeTimeCount, pheap.HeapCache.FreeTimeCount)
+    window.Log("+0x040 Depth                 : 0x%08x" % pheap.HeapCache.Depth, pheap.HeapCache.Depth)
+    window.Log("+0x044 HighDepth             : 0x%08x" % pheap.HeapCache.HighDepth, pheap.HeapCache.HighDepth)
+    window.Log("+0x048 LowDepth              : 0x%08x" % pheap.HeapCache.LowDepth, pheap.HeapCache.LowDepth)
+    window.Log("+0x04c Sequence              : 0x%08x" % pheap.HeapCache.Sequence, pheap.HeapCache.Sequence)
+    window.Log("+0x050 ExtendCount           : 0x%08x" % pheap.HeapCache.ExtendCount, pheap.HeapCache.ExtendCount)
+    window.Log("+0x054 CreateUCRCount        : 0x%08x" % pheap.HeapCache.CreateUCRCount, pheap.HeapCache.CreateUCRCount)
+    window.Log("+0x058 LargestHighDepth      : 0x%08x" % pheap.HeapCache.LargestHighDepth, pheap.HeapCache.LargestHighDepth)
+    window.Log("+0x05c HighLowDifference     : 0x%08x" % pheap.HeapCache.HighLowDifference, pheap.HeapCache.HighLowDifference)
+    window.Log("+0x060 pBitmap               : 0x00%14x" % pheap.HeapCache.pBitmap, pheap.HeapCache.pBitmap)
+                        
 # dump the HeapCache
 # TODO: graph this structure
 # validation is already done when iterating over FreeList[0] (i need to double check this though)
@@ -1321,6 +1354,10 @@ def main(args):
                     usageText = cmds["analysesegments"].usage.split("\n")
                     for line in usageText:
                         imm.log(line)
+                elif args[1].lower().strip() == "analyseheapcache" or args[1].lower().strip() == "ahc":
+                    usageText = cmds["analyseheapcache"].usage.split("\n")
+                    for line in usageText:
+                        imm.log(line)
                 elif args[1].lower().strip() == "freelistinuse" or args[1].lower().strip() == "fliu":
                     usageText = cmds["freelistinuse"].usage.split("\n")
                     for line in usageText:
@@ -1375,8 +1412,6 @@ def main(args):
                 window.Log("Dumping function pointers from the %s process" % imm.getDebuggedName())
                 window.Log("-" * 60)
                 dump_function_pointers(window, imm, writable_segment)
-                 
-           
             else:
                 return "Invalid number of arguments"
         else:
@@ -1444,9 +1479,16 @@ def main(args):
                     window.Log("Invalid heap address!")
                     return "Invalid heap address!"
                 if imm.getOsVersion() == "xp":
-                    window.Log("-" * 62)
-                    window.Log("FreeList structure @ 0x%08x" % (heap+0x178))
-                    window.Log("-" * 62)
+                    
+                    if pheap.HeapCache:
+                        window.Log("-" * 62)
+                        window.Log("FreeList structure @ 0x%08x (HeapCache active)" % (heap+0x178))
+                        window.Log("- use '!heaper dc 0x%08x' to dump the HeapCache separately" % (heap+0x178))
+                        window.Log("-" * 62)
+                    else:
+                        window.Log("-" * 50)
+                        window.Log("FreeList structure @ 0x%08x (HeapCache inactive)" % (heap+0x178))
+                        window.Log("-" * 50)
                     if graphic_structure:
                         if custfilename:
                             dump_freelist(imm, pheap, window, heap, graphic_structure, filename)
@@ -1470,7 +1512,33 @@ def main(args):
                     # do vista and windows 7 freelist analyse?
                 else:
                     window.Log("(-) Freelist analyse not supported under Vista and above")
-                        
+            
+            # analyse heap cache if it exists:
+            elif args[0].lower().strip() == "analyseheapcache" or args[0].lower().strip() == "ahc":
+                try:
+                    pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                except:
+                    window.Log("Invalid heap address!")
+                    return "Invalid heap address!"
+                if imm.getOsVersion() == "xp":
+                    if pheap.HeapCache:
+                        dump_HeapCache_struc(pheap, window)
+                        window.Log("")
+                        window.Log("HeapCache:")
+                        window.Log("----------")
+                        dump_HeapCache(pheap,window,imm)
+                        window.Log("")
+                        window.Log("HeapCache Bitmap:")
+                        window.Log("-----------------")
+                        dump_HeapCache_bitmap(pheap, window)
+                    else:
+                        window.Log("")
+                        window.Log("(!) The HeapCache is inactive for this heap!")
+                        window.Log("(+) You can activate it by:")
+                        window.Log("    1. Freeing 32 blocks into FreeList[0] simultaneously")
+                        window.Log("    2. De-commiting 256 blocks")
+                        return "(-) The HeapCache is inactive for this heap!"
+                                               
             # analyse FreelistInUse
             elif args[0].lower().strip() == "freelistinuse" or args[0].lower().strip() == "fliu":
                 try:
