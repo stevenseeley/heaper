@@ -453,11 +453,96 @@ def setUpArgs():
     return cmds
 
 # TODO: build heuristics to detect exploitable paths...
-# exploit heuristics
-def do_heuristics(window, structure, chunk_number, list_number):
-    if structure == "freelist":
-        window.Log("        (+) Checking heuristics for chunk (%d) in freelist[%03d]" % (chunk_number,list_number))
-        # 1st lets check for freelist insert attack vector
+# FreeList[0] complete, FreeList[n] and Lookaside[n] to go...
+def do_heuristics(window, chunk_data, pheap, imm, data_structure):
+    window.Log("")
+    window.Log("-" * 46)
+    window.Log("Performing heuristics against corrupted chunks")
+    window.Log("-" * 46)
+    # extract the corrupt data
+    corrupt_chunk_data = imm.getKnowledge(chunk_data)
+    corrupt_chunk_size = corrupt_chunk_data[0]
+    corrupt_chunk_address = corrupt_chunk_data[1]
+    corrupt_chunk_blink = corrupt_chunk_data[2]
+    corrupt_chunk_flink = corrupt_chunk_data[3]
+    entry_offset = corrupt_chunk_data[4]
+    # real values
+    blink = corrupt_chunk_data[4]
+    flink = corrupt_chunk_data[5]
+    # check for FreeList[0] insert, search, blocksplit
+    if data_structure == "freelist" and corrupt_chunk_size == 0:
+
+        # search all the chunks
+        for index, chunk in enumerate(pheap.chunks):
+            # compare chunk addresses and if the sizes are the same, 
+            # i suspect at least a 4 byte overwrite..
+            if (corrupt_chunk_address-0x8) == chunk.addr:
+                if chunk.psize == chunk.size:
+                    window.Log("")
+                    window.Log("(+) Detected corrupted chunk in FreeList[0x%02x] chunk address 0x%08x" % (corrupt_chunk_size,corrupt_chunk_address))
+                    # 1st lets check for freelist insert attack vector
+                    window.Log("")
+                    window.Log(" > Freelist[0] insert attack:")
+                    window.Log("    - Free a chunk of size > %d (0x%02x) < %d (0x%02x)" % 
+                               (pheap.chunks[index-1].size, pheap.chunks[index-1].size, pheap.chunks[index].size, pheap.chunks[index].size))
+                    # blink checks
+                    if corrupt_chunk_blink != blink:
+                        window.Log("    - Blink was detected to be overwritten (0x%08x), try setting it to a lookaside[n] entry or a function pointer table" % corrupt_chunk_blink)
+                    else:
+                        window.Log("    - Try to overwrite the blink for this chunk so you can control what the address that points to the inserted chunk or try another attack")
+                
+                    window.Log("")
+                    window.Log(" > Freelist[0] search attack:")
+                    window.Log("    - Overwrite with a size you can allocate. Current size: %d (0x%02x)" % (pheap.chunks[index].size, pheap.chunks[index].size))
+                    # if flink == 0x1, its the last chunk in the list entry
+                    if (flink == 0x1 and entry_offset != corrupt_chunk_flink) or (flink != 0x1 and flink != corrupt_chunk_flink):
+                        window.Log("    - Flink was detected to be overwritten (0x%08x), try setting it to a fake chunk structure" % corrupt_chunk_flink)
+                    else:
+                        window.Log("    - Try to overwrite the flink for this chunk so you can point it to a fake chunk or try another attack")
+                           
+                    window.Log("")
+                    window.Log(" > Freelist[0] relinking attack:")
+                    window.Log("    - Overwrite with a size you can allocate. Current size: %d (0x%02x)" % (pheap.chunks[index].size, pheap.chunks[index].size))
+                    # if flink == 0x1, its the last chunk in the list entry
+                    if (flink == 0x1 and corrupt_chunk_address != corrupt_chunk_flink) or (flink != 0x1 and flink != corrupt_chunk_flink):
+                        window.Log("    - Flink was detected to be overwritten (0x%08x), try setting it to a fake chunk structure" % corrupt_chunk_flink)
+                    else:
+                        window.Log("    - Try to overwrite the flink for this chunk so you can point it to a fake chunk or try another attack")
+                    
+                    # information for the user..
+                    window.Log("")
+                    window.Log("1. Freelist[0] insert attack:")
+                    window.Log("-" * 29)
+                    window.Log("The idea here is overwrite a chunks blink and set it to a lookaside[n] entry or function pointer table")
+                    window.Log("1. Overwriten chunk's blink will be set to the Lookaside[n] list entry")
+                    window.Log("2. Free chunk is inserted BEFORE the overwritten chunk write the address of the free chunk into blinks address (blink->inserted_chunk)")            
+                    window.Log("3. Now lookaside[n]->inserted_chunk->overwritten_chunk->controlled_flink")
+                    window.Log("4. Now pop 3 chunks off the lookaside[n] to get the controlled flink returned from RtlAllocateHeap")
+                    window.Log("5. Overwrite a function pointer")
+                    window.Log("")
+                    window.Log("2. Freelist[0] search attack:")
+                    window.Log("-" * 29)
+                    window.Log("The idea here is overwrite a chunks flink and set it to a fake chunk.")
+                    window.Log("1. Set the flink to an address at the base of the heap (eg: heapbase+0x188)")
+                    window.Log("2. When a size that is bigger than the overwritten chunk is requested, it will return the fake chunk address-0x8 (heapbase+0x180)")                   
+                    window.Log("- You can set it to FreeList[0x41] or FreeList[0x42] and overwrite the RtlCommitRoutine pointer at offset heapbase+0x578")
+                    window.Log("- Or you could overwrite the blink/flink of a FreeList[n] entry itself..?")
+                    window.Log("")
+                    window.Log("3. Freelist[0] relinking attack:")
+                    window.Log("-" * 32)
+                    window.Log("The idea here is to control flink, so that you can indirectly control address that WILL point to the blink of the fake chunk")
+                    window.Log("1. The chunk gets split and the relink chunk is inserted BEFORE the fake chunk")
+                    window.Log("2. The address of the relink chunk is written to the fake chunks blink")
+                    window.Log("3. The idea is to overwrite the pointer to the Lookaside (heapbase+0x580) with a pointer to the fake chunk")
+                    window.Log(" - set the flink to be heapbase+0x57c")
+                    window.Log(" - set the fake chunk to be heapbase+0x574")
+                    window.Log(" - flink of fake chunk will be at heapbase+0x57c")
+                    window.Log(" - blink of fake chunk will be heapbase+0x580, thus overwriting heapbase+0x688 with the relink chunk address")
+    
+    window.Log("")
+    window.Log("(!) Heuristics check completed")
+    # remove the obj for next run
+    imm.forgetKnowledge(chunk_data)
     
 def dump_heap(imm):
     imm.log("Listing available heaps: ")
@@ -928,29 +1013,29 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                 # if we are not FreeList[0] and yet we have chunks
                 if a != 0:
                     window.Log("FreeList[0x%02x] - 0x%08x | +0x4 = 0x%08x | -0x4 = 0x%08x [expected size: %s-8=%s]" % (a, e[0],(e[0]+0x4), (e[0]-0x4), expected_size, result_of_expected_size), address = e[0])
-                    window.Log("        [FreeList[0x%02x].blink : 0x%08x | FreeLists[%03d].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
+                    window.Log("        [FreeList[0x%02x].blink : 0x%08x | FreeLists[0x%02x].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
                 else:
                     window.Log("FreeList[0x%02x] - 0x%08x | +0x4 = 0x%08x | -0x4 = 0x%08x [expected size: %s]" % (a, e[0],(e[0]+0x4), (e[0]-0x4), expected_size_freelist0), address = e[0])
-                    window.Log("        [FreeList[0x%02x].blink : 0x%08x | FreeLists[%03d].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
+                    window.Log("        [FreeList[0x%02x].blink : 0x%08x | FreeLists[0x%02x].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
                          
                 # for each avaliable chunk in the freelist[] entry            
                 for fc in entry[1:]:
                     # anti-confusion, setup the needed chunks
                     if len(entry[1:]) == 1:
-                        prevChunkAddr = e[0]
+                        prevchunk_address = e[0]
                     else:
-                        prevChunkAddr = entry[1:][entry[1:].index(fc)-1][0]
+                        prevchunk_address = entry[1:][entry[1:].index(fc)-1][0]
                     try:
-                        nextChunkAddr = entry[1:][entry[1:].index(fc)+1][0]
+                        nextchunk_address = entry[1:][entry[1:].index(fc)+1][0]
                     except:
-                        nextChunkAddr = 1
-                    chunkAddr  = fc[0]
-                    chunkBlink = fc[1]
-                    chunkFlink = fc[2]
+                        nextchunk_address = 1
+                    chunk_address  = fc[0]
+                    chunk_blink = fc[1]
+                    chunk_flink = fc[2]
                     # read the chunks size
                     
                     try:
-                        sz = pheap.get_chunk( chunkAddr - block ).size
+                        sz = pheap.get_chunk( chunk_address - block ).size
                         # avoid freelist[0] as it can be anything > 1016
                         if a != 0:
                             calc_sz = (sz * block) - block
@@ -961,38 +1046,90 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                         sz = 0
                     # win32heapchunk API does not accommodate for the cookie, so lets do it manually 
                     # header [0x2 - size][0x2 - previous size][0x1 - cookie][0x1 - flag][0x1 - unused][0x1 - segment index]
-                    chunkCookie = imm.readMemory(chunkAddr-0x4, 1) # chunkAddr includes header
+                    chunkCookie = imm.readMemory(chunk_address-0x4, 1) # chunk_address includes header
                     chunkCookie = reverse(chunkCookie)
                     chunkCookie = int(binascii.hexlify(chunkCookie),16)                    
-                    chunk_data = "Chunk (%d) 0x%08x\nBlink (0x%08x)\nFlink (0x%08x)" % (chunkNum, chunkAddr, chunkBlink, chunkFlink)
+                    chunk_data = "Chunk (%d) 0x%08x\nBlink (0x%08x)\nFlink (0x%08x)" % (chunkNum, chunk_address, chunk_blink, chunk_flink)
                     chunkNum += 1
-                    window.Log("         * Chunk [%d]: 0x%08x  [blink : 0x%08x  | flink : 0x%08x] " % (chunkNum, chunkAddr, chunkBlink, chunkFlink), address = chunkAddr) 
-                    window.Log("                 [%d]: size: 0x%04x | calculated size: %d (0x%04x) - cookie: 0x%02x" % (chunkNum, sz, calc_sz, calc_sz, chunkCookie), address = chunkAddr) 
+                    window.Log("         * Chunk [%d]: 0x%08x  [blink : 0x%08x  | flink : 0x%08x] " % (chunkNum, chunk_address, chunk_blink, chunk_flink), address = chunk_address) 
+                    window.Log("                 [%d]: size: 0x%04x | calculated size: %d (0x%04x) - cookie: 0x%02x" % (chunkNum, sz, calc_sz, calc_sz, chunkCookie), address = chunk_address) 
                     if graphic_structure:
                         chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#3366ff"))
-                    # safe unlinking, or at least the best ill get ;)
-                    # if there is a valid next chunk, do the check
-                    if nextChunkAddr != 1:
-                        if prevChunkAddr != chunkBlink and chunkFlink != nextChunkAddr:
-                            window.Log("           --> Flink and Blink appear to be overwritten, code execution maybe possible")
-                            
-                            # window, strucure, chunk number, freelist entry id
-                            do_heuristics(window, "freelist", chunkNum, a)
-                            
+                    
+                    if a != 0:
+                        # now lets validate the integrity of the linked list using safe unlinking checks
+                        # Not the last chunk in the entry..
+                        if sz != expected_size and nextchunk_address != 1:
+                            if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
+                                window.Log("           --> Size, Flink and Blink appear to be overwritten, code execution maybe possible")
+                            else:
+                                window.Log("           --> Size appears to be overwritten, code execution maybe possible")                            
+                            # something is dodgy, lets save it for performing heuristics later..
+                            imm.addKnowledge("FreeList_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
                             if graphic_structure:
-                                chunk_nodes.append(pydot.Node("flink_blink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nFlink/Blink overwrite...", fillcolor="red"))
-                    # else just check blink
-                    else:
-                        if prevChunkAddr != chunkBlink:
-                            window.Log("           --> Flink and Blink appear to be overwritten, code execution maybe possible")
-                            do_heuristics(window, "freelist", chunkNum, a)
+                                if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
+                                    chunk_nodes.append(pydot.Node("flink_blink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nThe Size, Flink and Blink\n are overwritten...", fillcolor="red"))
+                                else:
+                                    chunk_nodes.append(pydot.Node("size_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nThe Size is overwritten...", fillcolor="red"))                   
+                        
+                        # now lets validate the integrity of the linked list using safe unlinking checks
+                        # Last chunk in the entry..
+                        elif sz != expected_size and nextchunk_address == 1:
+                            if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
+                                window.Log("           --> Size, Flink and Blink appear to be overwritten, code execution maybe possible")
+                            else:
+                                window.Log("           --> Size appears to be overwritten, code execution maybe possible")
+                            # something is dodgy, lets save it for performing heuristics later..   
+                            imm.addKnowledge("FreeList_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
                             if graphic_structure:
-                                chunk_nodes.append(pydot.Node("flink_blink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nFlink/Blink overwrite...", fillcolor="red"))
-            
+                                if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
+                                    chunk_nodes.append(pydot.Node("flink_blink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nThe Size, Flink and Blink\n are overwritten...", fillcolor="red"))
+                                else:
+                                    chunk_nodes.append(pydot.Node("size_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nThe Size is overwritten...", fillcolor="red"))
+
+                    # FreeList[0]
+                    # you can do a check on the size... the only way is to see
+                    # if the chunks are in order by size....
+                    elif a == 0:
+                        # dont check for size as it could be overrwitten with value higher than 1016
+                        # not the last chunk
+                        if nextchunk_address != 1:
+                            if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
+                                window.Log("           --> Size, Flink and Blink appear to be overwritten, code execution maybe possible")                          
+                            
+                            # lets save it for performing heuristics later..
+                            # only on FreeList[0] is there no way to check for dodgy chunk here..
+                            imm.addKnowledge("FreeList_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
+                            if graphic_structure:
+                                window.Log("graph structure 1")
+                                if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
+                                    chunk_nodes.append(pydot.Node("flink_blink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nThe Size, Flink and Blink\n are overwritten...", fillcolor="red"))    
+                                    
+                        # last chunk
+                        elif nextchunk_address == 1:            
+                            if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
+                                window.Log("           --> Size, Flink and Blink appear to be overwritten, code execution maybe possible")                         
+                            # lets save it for performing heuristics later..
+                            # only on FreeList[0] is there no way to check for dodgy chunk here..
+                            imm.addKnowledge("FreeList_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
+                            if graphic_structure:
+                                if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
+                                    chunk_nodes.append(pydot.Node("flink_blink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nThe Size, Flink and Blink\n are overwritten...", fillcolor="red"))                                     
+ 
+                        # else just check blink
+                        else:
+                            if prevchunk_address != chunk_blink:
+                                window.Log("           --> Flink and Blink appear to be overwritten, code execution maybe possible")
+                                # lets save it for performing heuristics later..
+                                # only on FreeList[0] is there no way to check for dodgy chunk here..
+                                imm.addKnowledge("FreeList_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
+                                if graphic_structure:
+                                    chunk_nodes.append(pydot.Node("flink_blink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nFlink/Blink overwrite...", fillcolor="red"))
+                
             # if they have no chunks, print them anyway, prooves useful when performing certain attacks 
             elif len(entry[1:]) < 1:
                 window.Log("FreeList[0x%02x] - 0x%08x | +0x4 = 0x%08x | -0x4 = 0x%08x [expected size: %s-8=%s]" % (a, e[0],(e[0]+0x4), (e[0]-0x4), expected_size, result_of_expected_size), address = e[0])
-                window.Log("        [FreeList[0x%02x].blink : 0x%08x | FreeLists[%03d].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
+                window.Log("        [FreeList[0x%02x].blink : 0x%08x | FreeLists[0x%02x]].flink : 0x%08x]" % (a, e[1], a, e[2]), address = e[1])
             window.Log("")   
             window.Log("-" * 94)
                 
@@ -1054,12 +1191,13 @@ def dumpchunk_info(chunk, show_detail, window):
     
     # chunks on the lookaside will "appear" busy
     if chunk.getflags(chunk.flags) == "B$":
-        window.Log("    -> Lookaside[%d] entry" % chunk.size)
+        window.Log("    -> Lookaside[0x%02x] entry" % chunk.size)
         window.Log("        -> Flink: 0x%08x" % (chunk.addr+0x8))
     elif chunk.getflags(chunk.flags) == "F":
-        window.Log("    -> Freelist[%d] entry" % chunk.size)
+        window.Log("    -> Freelist[0x%02x] entry" % chunk.size)
         window.Log("        -> Flink: 0x%08x" % chunk.nextchunk) 
         window.Log("        -> Blink: 0x%08x" % chunk.prevchunk)
+        
 
     if show_detail:
         dump = immutils.hexdump(chunk.sample)
@@ -1496,8 +1634,16 @@ def main(args):
                             dump_freelist(imm, pheap, window, heap, graphic_structure)
                     else:
                         dump_freelist(imm, pheap, window, heap, graphic_structure)
+                        
                     dump_FreeListInUse(pheap, window)
                     
+                    # TODO: hueristics
+                    for knowledge in imm.listKnowledge():
+                        # match on the freelist chunks we added either 
+                        # (should ideally be only one corrupt chunk in the freelist
+                        if re.match("FreeList_chunk",knowledge):
+                            do_heuristics(window, knowledge, pheap, imm, "freelist")
+
                     # HeapCache
                     if pheap.HeapCache:
                         window.Log("")
