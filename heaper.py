@@ -454,7 +454,7 @@ def setUpArgs():
 
 # TODO: build heuristics to detect exploitable paths...
 # FreeList[0] complete, FreeList[n] and Lookaside[n] to go...
-def do_heuristics(window, chunk_data, pheap, imm, data_structure):
+def freelist0_heuristics(window, chunk_data, pheap, imm, data_structure):
     window.Log("")
     window.Log("-" * 46)
     window.Log("Performing heuristics against corrupted chunks")
@@ -477,9 +477,19 @@ def do_heuristics(window, chunk_data, pheap, imm, data_structure):
             # compare chunk addresses and if the sizes are the same, 
             # i suspect at least a 4 byte overwrite..
             if (corrupt_chunk_address-0x8) == chunk.addr:
-                if chunk.psize == chunk.size:
+                # if its the last chunk in the freelist[0] we can only check if we modify past
+                # 2 bytes, else we just have to check the 1st byte!
+                # this check can be inhanced further for freelist[n]
+                if ((flink == 1 and pheap.chunks[index-1].size != chunk.psize) 
+                    or (flink != 1 and pheap.chunks[index+1].psize != chunk.size
+                    and pheap.chunks[index-1].size != chunk.psize)):
+                    
                     window.Log("")
                     window.Log("(+) Detected corrupted chunk in FreeList[0x%02x] chunk address 0x%08x" % (corrupt_chunk_size,corrupt_chunk_address))
+                    if flink == 1:
+                        window.Log(" -> This chunk is the last entry in FreeList[0]")
+                    elif flink != 1:
+                        window.Log(" -> This chunk is number %d in FreeList[0]" % index)   
                     # 1st lets check for freelist insert attack vector
                     window.Log("")
                     window.Log(" > Freelist[0] insert attack:")
@@ -509,6 +519,13 @@ def do_heuristics(window, chunk_data, pheap, imm, data_structure):
                     else:
                         window.Log("    - Try to overwrite the flink for this chunk so you can point it to a fake chunk or try another attack")
                     
+                    # HeapCache attack validation goes here:
+                    # check which bucket has the overwritten chunk..
+                    # walk the bitmap and work out which size doesnt match. 
+                    # that will be the size to allocate() next? best approach? moar thinking
+                    # use HeapCache.c to determine this...
+                    if pheap.HeapCache:
+                        window.Log("(+) Performing HeapCache analysis...")
                     # information for the user..
                     window.Log("")
                     window.Log("1. Freelist[0] insert attack:")
@@ -1065,7 +1082,7 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                             else:
                                 window.Log("           --> Size appears to be overwritten, code execution maybe possible")                            
                             # something is dodgy, lets save it for performing heuristics later..
-                            imm.addKnowledge("FreeList_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
+                            imm.addKnowledge("FreeListn_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
                             if graphic_structure:
                                 if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
                                     chunk_nodes.append(pydot.Node("flink_blink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nThe Size, Flink and Blink\n are overwritten...", fillcolor="red"))
@@ -1080,7 +1097,7 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                             else:
                                 window.Log("           --> Size appears to be overwritten, code execution maybe possible")
                             # something is dodgy, lets save it for performing heuristics later..   
-                            imm.addKnowledge("FreeList_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
+                            imm.addKnowledge("FreeListn_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
                             if graphic_structure:
                                 if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
                                     chunk_nodes.append(pydot.Node("flink_blink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nThe Size, Flink and Blink\n are overwritten...", fillcolor="red"))
@@ -1088,18 +1105,17 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                                     chunk_nodes.append(pydot.Node("size_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nThe Size is overwritten...", fillcolor="red"))
 
                     # FreeList[0]
-                    # you can do a check on the size... the only way is to see
-                    # if the chunks are in order by size....
+                    # huertistic validation of corrupted chunk is done at freelist0_heuristics()
                     elif a == 0:
-                        # dont check for size as it could be overrwitten with value higher than 1016
-                        # not the last chunk
+                        
+                        # check if this chunk is not the last chunk in the entry
                         if nextchunk_address != 1:
                             if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
                                 window.Log("           --> Size, Flink and Blink appear to be overwritten, code execution maybe possible")                          
                             
                             # lets save it for performing heuristics later..
-                            # only on FreeList[0] is there no way to check for dodgy chunk here..
-                            imm.addKnowledge("FreeList_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
+                            # only on FreeList[0] we validate the integrity of the chunk in freelist0_heuristics()
+                            imm.addKnowledge("FreeList0_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
                             if graphic_structure:
                                 window.Log("graph structure 1")
                                 if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
@@ -1110,19 +1126,20 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                             if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
                                 window.Log("           --> Size, Flink and Blink appear to be overwritten, code execution maybe possible")                         
                             # lets save it for performing heuristics later..
-                            # only on FreeList[0] is there no way to check for dodgy chunk here..
-                            imm.addKnowledge("FreeList_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
+                            # only on FreeList[0] we validate the integrity of the chunk in freelist0_heuristics()
+                            imm.addKnowledge("FreeList0_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
                             if graphic_structure:
                                 if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
                                     chunk_nodes.append(pydot.Node("flink_blink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nThe Size, Flink and Blink\n are overwritten...", fillcolor="red"))                                     
  
                         # else just check blink
+                        # code probably never lands here... will check and remove soon
                         else:
                             if prevchunk_address != chunk_blink:
                                 window.Log("           --> Flink and Blink appear to be overwritten, code execution maybe possible")
                                 # lets save it for performing heuristics later..
                                 # only on FreeList[0] is there no way to check for dodgy chunk here..
-                                imm.addKnowledge("FreeList_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
+                                imm.addKnowledge("FreeList[0]_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
                                 if graphic_structure:
                                     chunk_nodes.append(pydot.Node("flink_blink_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nFlink/Blink overwrite...", fillcolor="red"))
                 
@@ -1641,8 +1658,8 @@ def main(args):
                     for knowledge in imm.listKnowledge():
                         # match on the freelist chunks we added either 
                         # (should ideally be only one corrupt chunk in the freelist
-                        if re.match("FreeList_chunk",knowledge):
-                            do_heuristics(window, knowledge, pheap, imm, "freelist")
+                        if re.match("FreeList0_chunk_",knowledge):
+                            freelist0_heuristics(window, knowledge, pheap, imm, "freelist")
 
                     # HeapCache
                     if pheap.HeapCache:
