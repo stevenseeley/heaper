@@ -56,6 +56,11 @@ ALLOCLABEL = "RtlAllocateHeap Hook"
 FREELABEL = "RtlFreeHeap Hook"
 CREATELABEL = "RtlCreateHeap Hook"
 DESTROYLABEL = "RtlDestroyHeap Hook"
+REALLOCLABEL = "RtlReAllocateHeap Hook"
+SIZELABEL = "RtlSizeHeap Hook"
+CREATECSLABEL = "RtlInitializeCriticalSection Hook"
+DELETECSLABEL = "RtlDeleteCriticalSection Hook"
+SETUEFLABEL = "SetUnhandledExceptionFilter Hook"
 ##################################################################################
 
 
@@ -290,7 +295,147 @@ class RtlDestroyHeap_ret(LogBpHook):
         return_value = regs['EAX']
         self.window.Log("(+) RtlDestroyHeap() returned: 0x%08x" % (return_value)) 
         self.window.Log("-" * 30)
-            
+             
+class RtlReAllocateHeap(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        imm = immlib.Debugger()
+        res=imm.readMemory( regs['ESP'] + 4, 0x10)
+        if len(res) != 0x10:
+            self.window.Log("(-) RtlReAllocateHeap: the stack seems to broken, unable to get args")
+            return 0x0
+        (heap, dwFlags, lpMem, dwBytes) = struct.unpack("LLLL", res)
+        self.window.Log("(+) RtlDestroyHeap(0x%08x, 0x%08x, 0x%08x, 0x%08x)" % (heap, dwFlags, lpMem, dwBytes))
+
+class RtlReAllocateHeap_ret(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        return_value = regs['EAX']
+        self.window.Log("(+) RtlReAllocateHeap() returned: 0x%08x" % (return_value)) 
+        self.window.Log("-" * 30)   
+        
+class RtlSizeHeap(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        imm = immlib.Debugger()
+        res=imm.readMemory( regs['ESP'] + 4, 0xc)
+        if len(res) != 0xc:
+            self.window.Log("(-) RtlSizeHeap: the stack seems to broken, unable to get args")
+            return 0x0
+        (heap, dwFlags, lpMem) = struct.unpack("LLL", res)
+        self.window.Log("(+) RtlSizeHeap(0x%08x, 0x%08x, 0x%08x)" % (heap, dwFlags, lpMem))
+
+class RtlSizeHeap_ret(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        return_value = regs['EAX']
+        self.window.Log("(+) RtlSizeHeap() returned: 0x%08x" % (return_value)) 
+        self.window.Log("-" * 30)
+
+class RtlInitializeCriticalSection(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        imm = immlib.Debugger()
+        res=imm.readMemory( regs['ESP'] + 4, 0x4)
+        if len(res) != 0x4:
+            self.window.Log("(-) RtlInitializeCriticalSection: the stack seems to broken, unable to get args")
+            return 0x0
+        (cs) = struct.unpack("L", res)
+        self.window.Log("(+) RtlInitializeCriticalSection(0x%08x)" % (cs))
+
+class RtlInitializeCriticalSection_ret(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        return_value = regs['EAX']
+        self.window.Log("(+) RtlInitializeCriticalSection() returned: 0x%08x" % (return_value)) 
+        self.window.Log("-" * 30)          
+
+class RtlDeleteCriticalSection(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        imm = immlib.Debugger()
+        res=imm.readMemory( regs['ESP'] + 4, 0x4)
+        if len(res) != 0x4:
+            self.window.Log("(-) RtlDeleteCriticalSection: the stack seems to broken, unable to get args")
+            return 0x0
+        (cs) = struct.unpack("L", res)
+        self.window.Log("(+) RtlDeleteCriticalSection(0x%08x)" % (cs))
+
+class RtlDeleteCriticalSection_ret(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        return_value = regs['EAX']
+        self.window.Log("(+) RtlDeleteCriticalSection() returned: 0x%08x" % (return_value)) 
+        self.window.Log("-" * 30)          
+                                                  
+class SetUnhandledExceptionFilter(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        imm = immlib.Debugger()
+        res=imm.readMemory( regs['ESP'] + 4, 0x4)
+        if len(res) != 0x4:
+            self.window.Log("(-) SetUnhandledExceptionFilter: the stack seems to broken, unable to get args")
+            return 0x0
+        (pTopLevelFilter) = struct.unpack("L", res)
+        self.window.Log("(+) SetUnhandledExceptionFilter(0x%08x)" % (pTopLevelFilter))
+
+class SetUnhandledExceptionFilter_ret(LogBpHook):
+    def __init__(self, heap, window):
+        LogBpHook.__init__(self)
+        self.Heap = heap
+        self.window = window
+        
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        return_value = regs['EAX']
+        self.window.Log("(+) SetUnhandledExceptionFilter() returned: 0x%08x" % (return_value)) 
+        self.window.Log("-" * 30) 
+        
 def hook_on(imm, heap, LABEL, HeapHook_vals, HeapHook_ret, bp_address, bp_retaddress, Disable, window):
     hookalloc_vals = imm.getKnowledge( LABEL + "_%08x_values" % heap )
     hookalloc_ret = imm.getKnowledge( LABEL + "_%08x_ret" % heap )
@@ -327,7 +472,7 @@ def hook_on(imm, heap, LABEL, HeapHook_vals, HeapHook_ret, bp_address, bp_retadd
             window.Log("(?) HookAlloc for heap 0x%08x is already running" % heap)
         return "Hooked"
 
-# banners, i know huh pretty lame
+# banners heh
 def banner(imm):
     imm.log("----------------------------------------",highlight=1) 
     imm.log("    __                         ",highlight=1)
@@ -383,15 +528,16 @@ def get_extended_usage():
     extusage["hook"] += "Use -h to hook any function.\n"
     extusage["hook"] += "Use -u to unhook any function.\n"
     extusage["hook"] += "Available functions to hook are: \n"
-    extusage["hook"] += "- RtlAllocateHeap()              [alloc] (working)\n"
-    extusage["hook"] += "- RtlFreeHeap()                  [free] (working)\n"
-    extusage["hook"] += "- RtlCreateHeap()                [create] (working)\n"
-    extusage["hook"] += "- RtlDestroyHeap()               [destroy] (working)\n"
-    extusage["hook"] += "- RtlReAllocateHeap()            [realloc] (dev)\n"
-    extusage["hook"] += "- RtlSizeHeap()                  [size] (dev)\n"
-    extusage["hook"] += "- RtlInitializeCriticalSection() [initialcs] (dev)\n"
-    extusage["hook"] += "- RtlDeleteCriticalSection()     [deletecs] (dev)\n"
-    extusage["hook"] += "- Hook all!                      [all] (dev)\n"
+    extusage["hook"] += "- RtlAllocateHeap()              [alloc]\n"
+    extusage["hook"] += "- RtlFreeHeap()                  [free]\n"
+    extusage["hook"] += "- RtlCreateHeap()                [create]\n"
+    extusage["hook"] += "- RtlDestroyHeap()               [destroy]\n"
+    extusage["hook"] += "- RtlReAllocateHeap()            [realloc]\n"
+    extusage["hook"] += "- RtlSizeHeap()                  [size]\n"
+    extusage["hook"] += "- RtlInitializeCriticalSection() [createcs]\n"
+    extusage["hook"] += "- RtlDeleteCriticalSection()     [deletecs]\n"
+    extusage["hook"] += "- SetUnhandledExceptionFilter()  [setuef]\n"
+    extusage["hook"] += "- Hook all!                      [all]\n"
     extusage["hook"] += "eg: !heaper hook 0x00150000 -h realloc\n"
     extusage["hook"] += "eg: !heaper hook -u all\n"
     extusage["hook"] += "eg: !heaper hook -h create\n"
@@ -454,11 +600,7 @@ def setUpArgs():
 
 # TODO: build heuristics to detect exploitable paths...
 # FreeList[0] complete, FreeList[n] and Lookaside[n] to go...
-def freelist0_heuristics(window, chunk_data, pheap, imm, data_structure):
-    window.Log("")
-    window.Log("-" * 46)
-    window.Log("Performing heuristics against corrupted chunks")
-    window.Log("-" * 46)
+def freelist0_heuristics(window, chunk_data, pheap, imm, data_structure, vuln_chunks):
     # extract the corrupt data
     corrupt_chunk_data = imm.getKnowledge(chunk_data)
     corrupt_chunk_size = corrupt_chunk_data[0]
@@ -526,40 +668,43 @@ def freelist0_heuristics(window, chunk_data, pheap, imm, data_structure):
                     # use HeapCache.c to determine this...
                     if pheap.HeapCache:
                         window.Log("(+) Performing HeapCache analysis...")
+                        
+                    else:
+                        window.Log("(!) The HeapCache is inactive for this FreeList[0].")
                     # information for the user..
-                    window.Log("")
-                    window.Log("1. Freelist[0] insert attack:")
-                    window.Log("-" * 29)
-                    window.Log("The idea here is overwrite a chunks blink and set it to a lookaside[n] entry or function pointer table")
-                    window.Log("1. Overwriten chunk's blink will be set to the Lookaside[n] list entry")
-                    window.Log("2. Free chunk is inserted BEFORE the overwritten chunk write the address of the free chunk into blinks address (blink->inserted_chunk)")            
-                    window.Log("3. Now lookaside[n]->inserted_chunk->overwritten_chunk->controlled_flink")
-                    window.Log("4. Now pop 3 chunks off the lookaside[n] to get the controlled flink returned from RtlAllocateHeap")
-                    window.Log("5. Overwrite a function pointer")
-                    window.Log("")
-                    window.Log("2. Freelist[0] search attack:")
-                    window.Log("-" * 29)
-                    window.Log("The idea here is overwrite a chunks flink and set it to a fake chunk.")
-                    window.Log("1. Set the flink to an address at the base of the heap (eg: heapbase+0x188)")
-                    window.Log("2. When a size that is bigger than the overwritten chunk is requested, it will return the fake chunk address-0x8 (heapbase+0x180)")                   
-                    window.Log("- You can set it to FreeList[0x41] or FreeList[0x42] and overwrite the RtlCommitRoutine pointer at offset heapbase+0x578")
-                    window.Log("- Or you could overwrite the blink/flink of a FreeList[n] entry itself..?")
-                    window.Log("")
-                    window.Log("3. Freelist[0] relinking attack:")
-                    window.Log("-" * 32)
-                    window.Log("The idea here is to control flink, so that you can indirectly control address that WILL point to the blink of the fake chunk")
-                    window.Log("1. The chunk gets split and the relink chunk is inserted BEFORE the fake chunk")
-                    window.Log("2. The address of the relink chunk is written to the fake chunks blink")
-                    window.Log("3. The idea is to overwrite the pointer to the Lookaside (heapbase+0x580) with a pointer to the fake chunk")
-                    window.Log(" - set the flink to be heapbase+0x57c")
-                    window.Log(" - set the fake chunk to be heapbase+0x574")
-                    window.Log(" - flink of fake chunk will be at heapbase+0x57c")
-                    window.Log(" - blink of fake chunk will be heapbase+0x580, thus overwriting heapbase+0x688 with the relink chunk address")
-    
-    window.Log("")
-    window.Log("(!) Heuristics check completed")
+                    vuln_chunks += 1
+    if vuln_chunks >= 1:
+        window.Log("")
+        window.Log("1. Freelist[0] insert attack:")
+        window.Log("-" * 29)
+        window.Log("The idea here is overwrite a chunks blink and set it to a lookaside[n] entry or function pointer table")
+        window.Log("1. Overwriten chunk's blink will be set to the Lookaside[n] list entry")
+        window.Log("2. Free chunk is inserted BEFORE the overwritten chunk write the address of the free chunk into blinks address (blink->inserted_chunk)")            
+        window.Log("3. Now lookaside[n]->inserted_chunk->overwritten_chunk->controlled_flink")
+        window.Log("4. Now pop 3 chunks off the lookaside[n] to get the controlled flink returned from RtlAllocateHeap")
+        window.Log("5. Overwrite a function pointer")
+        window.Log("")
+        window.Log("2. Freelist[0] search attack:")
+        window.Log("-" * 29)
+        window.Log("The idea here is overwrite a chunks flink and set it to a fake chunk.")
+        window.Log("1. Set the flink to an address at the base of the heap (eg: heapbase+0x188)")
+        window.Log("2. When a size that is bigger than the overwritten chunk is requested, it will return the fake chunk address-0x8 (heapbase+0x180)")                   
+        window.Log("- You can set it to FreeList[0x41] or FreeList[0x42] and overwrite the RtlCommitRoutine pointer at offset heapbase+0x578")
+        window.Log("- Or you could overwrite the blink/flink of a FreeList[n] entry itself..?")
+        window.Log("")
+        window.Log("3. Freelist[0] relinking attack:")
+        window.Log("-" * 32)
+        window.Log("The idea here is to control flink, so that you can indirectly control address that WILL point to the blink of the fake chunk")
+        window.Log("1. The chunk gets split and the relink chunk is inserted BEFORE the fake chunk")
+        window.Log("2. The address of the relink chunk is written to the fake chunks blink")
+        window.Log("3. The idea is to overwrite the pointer to the Lookaside (heapbase+0x580) with a pointer to the fake chunk")
+        window.Log(" - set the flink to be heapbase+0x57c")
+        window.Log(" - set the fake chunk to be heapbase+0x574")
+        window.Log(" - flink of fake chunk will be at heapbase+0x57c")
+        window.Log(" - blink of fake chunk will be heapbase+0x580, thus overwriting heapbase+0x688 with the relink chunk address")
     # remove the obj for next run
     imm.forgetKnowledge(chunk_data)
+    return vuln_chunks
     
 def dump_heap(imm):
     imm.log("Listing available heaps: ")
@@ -726,6 +871,8 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
         chunk_dict = {}
     # we use the api where we can ;)
     if pheap.Lookaside:
+        no_chunks = 0
+        #window.Log("lookaside: 0x%08x" % pheap.Lookaside)
         for ndx in range(0, len(pheap.Lookaside)):
             entry = pheap.Lookaside[ndx]
             chunk_nodes = []    
@@ -815,10 +962,15 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                             window.Log("    chunk [%d]: 0x%08x, Flink: ??0x%08x??, Size: %d (0x%03x), Cookie: 0x%01x" % 
                                        (b, a, (a+0x8), (ndx * block), (ndx * block), chunkCookie), address = a)   
                             window.Log("        -> failed to read chunk @ 0x%08x!" % a, address = a)              
-                window.Log("-" * 77)        
+                window.Log("-" * 77)  
+
+            elif entry.isEmpty(): 
+                no_chunks +=1
+                                 
             if graphic_structure:
                 chunk_dict[ndx] = chunk_nodes
-                ndx_nodes.append(pydot.Node("Lookaside[%s]" % ndx, style="filled", shape="rectangle", fillcolor="#66FF66"))    
+                ndx_nodes.append(pydot.Node("Lookaside[%s]" % ndx, style="filled", shape="rectangle", fillcolor="#66FF66")) 
+
     else:
         window.Log("Cannot find lookaside list for this heap")
         imm.log( "Cannot find lookaside list for this heap" )
@@ -858,6 +1010,9 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                                 pass
         
         lalgraph.write_png(filename+".png")
+    #if the number of emtpy chunks is 128, we have no lookaside..
+    if no_chunks == 128:  
+        window.Log("(-) Lookaside not in use..")
 
 # get the bits for each freelist[n] entry
 def get_FreeListInUse(pHeap):
@@ -1076,7 +1231,7 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                     if a != 0:
                         # now lets validate the integrity of the linked list using safe unlinking checks
                         # Not the last chunk in the entry..
-                        if sz != expected_size and nextchunk_address != 1:
+                        if sz != a and nextchunk_address != 1:
                             if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
                                 window.Log("           --> Size, Flink and Blink appear to be overwritten, code execution maybe possible")
                             else:
@@ -1089,9 +1244,9 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                                 else:
                                     chunk_nodes.append(pydot.Node("size_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nThe Size is overwritten...", fillcolor="red"))                   
                         
-                        # now lets validate the integrity of the linked list using safe unlinking checks
+                        # now lets validate the integrity of the linked list using safe unlinking checks and size validation
                         # Last chunk in the entry..
-                        elif sz != expected_size and nextchunk_address == 1:
+                        elif sz != a and nextchunk_address == 1:
                             if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
                                 window.Log("           --> Size, Flink and Blink appear to be overwritten, code execution maybe possible")
                             else:
@@ -1321,8 +1476,9 @@ def dump_segment_structure(pheap, window, imm, heap):
         #BaseAddress = int(binascii.hexlify(BaseAddress),16) 
                     
         NumberOfPages = imm.readMemory(segment.BaseAddress+0x1c, 4)
-        NumberOfPages = reverse(NumberOfPages)
-        NumberOfPages = int(binascii.hexlify(NumberOfPages),16) 
+        NumberOfPages = struct.unpack("L", NumberOfPages)[0]
+        #NumberOfPages = reverse(NumberOfPages)
+        #NumberOfPages = int(binascii.hexlify(NumberOfPages),16) 
                     
         FirstEntry = imm.readMemory(segment.BaseAddress+0x20, 4)
         FirstEntry = reverse(FirstEntry)
@@ -1655,12 +1811,22 @@ def main(args):
                     dump_FreeListInUse(pheap, window)
                     
                     # TODO: hueristics
+                    window.Log("")
+                    window.Log("-" * 46)
+                    window.Log("Performing heuristics against corrupted chunks")
+                    window.Log("-" * 46)
+                    vuln_chunks = 0  
                     for knowledge in imm.listKnowledge():
                         # match on the freelist chunks we added either 
                         # (should ideally be only one corrupt chunk in the freelist
                         if re.match("FreeList0_chunk_",knowledge):
-                            freelist0_heuristics(window, knowledge, pheap, imm, "freelist")
-
+                            vuln_chunks += freelist0_heuristics(window, knowledge, pheap, imm, "freelist", vuln_chunks)
+                    window.Log("")
+                    if vuln_chunks > 0:
+                        window.Log("(!) Heuristics check completed")
+                    elif vuln_chunks <= 0:
+                        window.Log("(!) No vulnerable checks were identified") 
+                    
                     # HeapCache
                     if pheap.HeapCache:
                         window.Log("")
@@ -1709,7 +1875,6 @@ def main(args):
                 except:
                     window.Log("Invalid heap address!")
                     return "Invalid heap address!"
-                #window.Log("test: %x" % heap)
                 window.Log("")
                 
                 if len(args) > 2:
@@ -1848,12 +2013,19 @@ def main(args):
             # TODO: finish hooking..
             elif args[0].lower().strip() == "hook":
                 window.Log("")
-                valid_functions = ["alloc", "free", "create","destroy","realloc","size","initialcs","destroycs","all"]
+                valid_functions = ["alloc", "free", "create","destroy","realloc","size","createcs","deletecs","all","setuef"]
+                # flags
                 Disable = False
                 AllocFlag = False
                 FreeFlag = False
                 CreateFlag = False
                 DestroyFlag = False
+                ReAllocFlag = False
+                sizeFlag = False
+                CreateCSFlag = False
+                DeleteCSFlag = False
+                setuefFlag = False
+                
                 if len(args) > 2:
                     if len(args) == 4:
                         try:
@@ -1861,93 +2033,114 @@ def main(args):
                         except:
                             window.Log("Invalid heap address!")
                             return "Invalid heap address!"
-                        if args[2] == "-h":
+                        if args[2] == "-h" or args[2] == "-u":
+                            if args[2] == "-u":
+                                Disable = True
                             if args[3].lower().strip() in valid_functions:
                                 if args[3].lower().strip() == "alloc":
                                     AllocFlag = True
                                 elif args[3].lower().strip() == "free":
                                     FreeFlag = True
                                 elif args[3].lower().strip() == "create":
-                                    window.Log("(-) You do not need to specify a heap to hook RtlCreateHeap()!")
-                                    return "You do not need to specify a heap to hook RtlCreateHeap()!"
+                                    window.Log("(-) You do not need to specify a heap to hook/unhook RtlCreateHeap()!")
+                                    return "You do not need to specify a heap to hook/unhook RtlCreateHeap()!"
                                 elif args[3].lower().strip() == "destroy":
-                                    window.Log("(-) You do not need to specify a heap to hook RtlDestroyHeap()!")
-                                    return "You do not need to specify a heap to hook RtlDestroyHeap()!" 
+                                    window.Log("(-) You do not need to specify a heap to hook/unhook RtlDestroyHeap()!")
+                                    return "You do not need to specify a heap to hook/unhook RtlDestroyHeap()!" 
+                                elif args[3].lower().strip() == "setuef":
+                                    window.Log("(-) You do not need to specify a heap to hook/unhook SetUnhandledExceptionFilter()!")
+                                    return "You do not need to specify a heap to hook/unhook SetUnhandledExceptionFilter()!" 
+                                elif args[3].lower().strip() == "realloc":
+                                    ReAllocFlag = True
+                                elif args[3].lower().strip() == "size":
+                                    sizeFlag = True
+                                elif args[3].lower().strip() == "createcs":
+                                    CreateCSFlag = True
+                                elif args[3].lower().strip() == "deletecs":
+                                    DeleteCSFlag = True
+                                # yep, crazy mofo
                                 elif args[3].lower().strip() == "all":
-                                    window.Log("hook all")
+                                    AllocFlag = True
+                                    FreeFlag = True
+                                    CreateFlag = True
+                                    DestroyFlag = True
+                                    ReAllocFlag = True
+                                    sizeFlag = True
+                                    CreateCSFlag = True
+                                    DeleteCSFlag = True
+                                    setuefFlag = True
                             else:
                                 window.Log("(-) Please specify a VALID function to hook")
-                        elif args[2] == "-u":
-                            if args[3].lower().strip() in valid_functions:
-                                Disable = True
-                                if args[3].lower().strip() == "alloc":
-                                    AllocFlag = True
-                                elif args[3].lower().strip() == "free":
-                                    FreeFlag = True
-                                elif args[3].lower().strip() == "create":
-                                    window.Log("(-) You do not need to specify a heap to unhook RtlCreateHeap()!")
-                                    return "You do not need to specify a heap to unhook RtlCreateHeap()!"
-                                elif args[3].lower().strip() == "destroy":
-                                    window.Log("(-) You do not need to specify a heap to unhook RtlDestroyHeap()!")
-                                    return "You do not need to specify a heap to unhook RtlDestroyHeap()!"                        
-                                elif args[3].lower().strip() == "all":
-                                    window.Log("unhook all")
                         else:
                             return "(-) Invalid argument %s" % args[2]
                     
-                    elif args[1].lower().strip() == "-h":
+                    elif args[1].lower().strip() == "-h" or args[1].lower().strip() == "-u":
+                        if args[1].lower().strip() == "-u":
+                            Disable = True                           
                         if args[2].lower().strip() == "create":
                             CreateFlag = True
                         elif args[2].lower().strip() == "destroy":
                             DestroyFlag = True
-                            
-                    elif args[1].lower().strip() == "-u":
-                        Disable = True
-                        if args[2].lower().strip() == "create":
-                            CreateFlag = True
-                        elif args[2].lower().strip() == "destroy":
-                            DestroyFlag = True
+                        elif args[2].lower().strip() == "setuef":
+                            setuefFlag = True
                     else:
                         window.Log("%d" % len(args))
                         window.Log("(-) Please specify a function to hook/unhook using -h/-u")
                         return "(-) Please specify a function to hook/unhook using -h/-u"
-
+                
+                # display the hook..
+                window.Log("-" * 30)
                 if AllocFlag:
                     allocaddr = imm.getAddress("ntdll.RtlAllocateHeap" )
                     retaddr = allocaddr+0x117 # retn 0xc
-                    window.Log("-" * 30)
                     hook_output = ("(+) %s RtlAllocateHeap() for heap 0x%08x" % 
                     (hook_on(imm, heap, ALLOCLABEL, RtlAllocateHeapHook, RtlAllocateHeapHook_ret, allocaddr, retaddr, Disable, window), heap))
-                    window.Log(hook_output)
-                    window.Log("-" * 30)
-                    return hook_output
-                elif FreeFlag:
+                if FreeFlag:
                     freeaddr = imm.getAddress("ntdll.RtlFreeHeap" )
                     retaddr = freeaddr+0x130 # retn 0xc
-                    window.Log("-" * 30)
                     hook_output = ("(+) %s RtlFreeHeap() for heap 0x%08x" % 
                     (hook_on(imm, heap, FREELABEL, RtlFreeHeapHook, RtlFreeHeapHook_ret, freeaddr, retaddr, Disable, window), heap))
-                    window.Log(hook_output)
-                    window.Log("-" * 30)
-                    return hook_output
-                elif CreateFlag:
+                if CreateFlag:
                     createaddr = imm.getAddress("ntdll.RtlCreateHeap" )
                     retaddr = createaddr+0x42e
-                    window.Log("-" * 30)
                     hook_output = ("(+) %s RtlCreateHeap() for heap 0x%08x" % 
                     (hook_on(imm, 0, CREATELABEL, RtlCreateHeap, RtlCreateHeap_ret, createaddr, retaddr, Disable, window), 0))
-                    window.Log(hook_output)
-                    window.Log("-" * 30)
-                    return hook_output
-                elif DestroyFlag:
+                if DestroyFlag:
                     destoryaddr = imm.getAddress("ntdll.RtlDestroyHeap")
                     retaddr = destoryaddr+0xd9
-                    window.Log("-" * 30)
                     hook_output = ("(+) %s RtlDestroyHeap() for heap 0x%08x" % 
                     (hook_on(imm, 0, DESTROYLABEL, RtlDestroyHeap, RtlDestroyHeap_ret, destoryaddr, retaddr, Disable, window), 0))
-                    window.Log(hook_output)
-                    window.Log("-" * 30)
-                    return hook_output
+                if ReAllocFlag:
+                    reallocaddr = imm.getAddress("ntdll.RtlReAllocateHeap")
+                    retaddr = reallocaddr+0x20a
+                    hook_output = ("(+) %s RtlReAllocateHeap() for heap 0x%08x" % 
+                    (hook_on(imm, 0, REALLOCLABEL, RtlReAllocateHeap, RtlReAllocateHeap_ret, reallocaddr, retaddr, Disable, window), 0))
+                if sizeFlag:
+                    sizeaddr = imm.getAddress("ntdll.RtlSizeHeap")
+                    retaddr = sizeaddr+0x62
+                    hook_output = ("(+) %s RtlSizeHeap() for heap 0x%08x" % 
+                    (hook_on(imm, 0, SIZELABEL, RtlSizeHeap, RtlSizeHeap_ret, sizeaddr, retaddr, Disable, window), 0))
+                if CreateCSFlag:
+                    create_cs_addr = imm.getAddress("ntdll.RtlInitializeCriticalSection")
+                    retaddr = create_cs_addr+0x10
+                    hook_output = ("(+) %s RtlInitializeCriticalSection() for heap 0x%08x" % 
+                    (hook_on(imm, 0, CREATECSLABEL, RtlInitializeCriticalSection, RtlInitializeCriticalSection_ret, create_cs_addr, retaddr, Disable, window), 0))
+                if DeleteCSFlag:
+                    delete_cs_addr = imm.getAddress("ntdll.RtlDeleteCriticalSection")
+                    retaddr = delete_cs_addr+0x78
+                    hook_output = ("(+) %s RtlDeleteCriticalSection() for heap 0x%08x" % 
+                    (hook_on(imm, 0, DELETECSLABEL, RtlDeleteCriticalSection, RtlDeleteCriticalSection_ret, delete_cs_addr, retaddr, Disable, window), 0))                    
+                if setuefFlag:
+                    setuef_addr = imm.getAddress("kernel32.SetUnhandledExceptionFilter")
+                    # no worries if you dont return here, it just wont log the return address
+                    retaddr = setuef_addr-0x34707
+                    hook_output = ("(+) %s SetUnhandledExceptionFilter() for heap 0x%08x" % 
+                    (hook_on(imm, 0, SETUEFLABEL, SetUnhandledExceptionFilter, SetUnhandledExceptionFilter_ret, setuef_addr, retaddr, Disable, window), 0))                      
+                
+                window.Log(hook_output)
+                window.Log("-" * 30)                    
+                return hook_output                    
+                    
                 # TODO: hooking RtlReAllocateHeap, RtlSizeHeap, RtlInitializeCriticalSection, RtlDeleteCriticalSection    
                             
         # more than one command and that we cant understand
