@@ -67,9 +67,6 @@ VIRFREELABEL = "VirtualFree Hook"
 # valid functions too hook
 valid_functions = ["alloc", "free", "create", "destroy", "realloc", "size", "createcs", "deletecs",
                    "all", "setuef", "va", "vf"]
-
-# valid functions to hook that dont need a heap
-avaliable_funcs_default_heap = ["create", "destroy", "setuef", "va", "all", "size"]
 rheap = False
 ##################################################################################
 
@@ -374,8 +371,8 @@ def hook_on(imm, LABEL, bp_address, function_name, bp_retaddress, Disable, windo
             hook_values.UnHook()
             hook_ret_address.UnHook()
             window.Log("(+) UnHooked %s" % LABEL)
-            imm.forgetKnowledge( LABEL + "_values")
-            imm.forgetKnowledge( LABEL + "_ret")
+            imm.forgetKnowledge( LABEL + "%x_values" % heap)
+            imm.forgetKnowledge( LABEL + "%x_ret" % heap)
             return "Unhooked"
     else:
         if not hook_values:
@@ -2060,8 +2057,12 @@ def main(args):
                 if FreeFlag:
                     freeaddr = imm.getAddress("ntdll.RtlFreeHeap" )
                     retaddr = freeaddr+0x130
-                    hook_output = ("(+) %s RtlFreeHeap() for heap 0x%08x" % 
-                    (hook_on(imm, FREELABEL, freeaddr, "RtlFreeHeap", retaddr, Disable, window), heap))
+                    if FilterHeap:
+                        hook_output = ("(+) %s RtlFreeHeap() for heap 0x%08x" % 
+                        (hook_on(imm, FREELABEL, freeaddr, "RtlFreeHeap", retaddr, Disable, window, heap), heap))
+                    else:
+                        hook_output = ("(+) %s RtlFreeHeap()" % 
+                        (hook_on(imm, FREELABEL, freeaddr, "RtlFreeHeap", retaddr, Disable, window)))                        
                 if CreateFlag:
                     # we dont hook ntdll.RtlCreateHeap because its not simply a wrapper...
                     createaddr = imm.getAddress("kernel32.HeapCreate" )
