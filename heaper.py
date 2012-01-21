@@ -28,6 +28,7 @@ Note: you will need pydot, pyparser and graphviz for the graphing functionality
 '''
 
 __VERSION__ = '0.01'
+__IMM__ = '1.8'
 
 DESC="""!heaper - a tool to analyse heap structures."""
 
@@ -41,13 +42,12 @@ import struct
 import re
 
 ##################################################################################
-# GLOBALS VARS                                                                       #
+# GLOBALS VARS                                                                   #
 ##################################################################################
-available_commands = [
-"dumppeb", "dp", "dumpheaps", "dh", "analyseheap", "ah", "dumpteb", "dt", "analyselal", "al", 
-"analysefreelist", "af", "analysechunks", "ac", "dumpfunctionpointers", "dfp", "help", "-h", 
-"analysesegments", "as", "-f", "-m", "-p", "freelistinuse", "fliu", "hook", "analyseheapcache","ahc"]
-
+available_commands = ["dumppeb", "dp", "dumpheaps", "dh", "analyseheap", "ah", "dumpteb", "dt", 
+                      "analyselal", "al", "analysefreelist", "af", "analysechunks", "ac", 
+                      "dumpfunctionpointers", "dfp", "help", "-h", "analysesegments", "as", "-f", 
+                      "-m", "-p", "freelistinuse", "fliu", "hook", "analyseheapcache", "ahc", "h"]
 block = 8 # a block will always be 8 bytes
 opennewwindow = False
 graphic_structure = False
@@ -61,11 +61,21 @@ SIZELABEL = "RtlSizeHeap Hook"
 CREATECSLABEL = "RtlInitializeCriticalSection Hook"
 DELETECSLABEL = "RtlDeleteCriticalSection Hook"
 SETUEFLABEL = "SetUnhandledExceptionFilter Hook"
+VIRALLOCLABEL = "VirtualAlloc Hook"
+VIRFREELABEL = "VirtualFree Hook"
+
+# valid functions too hook
+valid_functions = ["alloc", "free", "create", "destroy", "realloc", "size", "createcs", "deletecs",
+                   "all", "setuef", "va", "vf"]
+
+# valid functions to hook that dont need a heap
+avaliable_funcs_default_heap = ["create", "destroy", "setuef", "va", "all", "size"]
+rheap = False
 ##################################################################################
 
 
 #  Utility functions
-def to_hex(n):
+def to_hex(n):    
     """
     Converts a numeric value to hex (pointer to hex)
 
@@ -178,301 +188,225 @@ class set_command:
         self.usage = usage
         self.parseProc = parseProc
         self.alias = alias
-        
+
 # RtlFreeHeap Hook class
-class RtlFreeHeapHook(LogBpHook):
-    def __init__(self, heap, window):
+class function_hook(LogBpHook):
+    """
+    Class to get the particular functions arguments for a debug instance
+    Return 
+    """
+    def __init__(self, window, function_name, heap=False):
         LogBpHook.__init__(self)
-        self.Heap = heap
         self.window = window
+        self.fname = function_name
+        self.heap = heap
+        self.rheap = None
         
     def run(self,regs):
         """This will be executed when hooktype happens"""
         imm = immlib.Debugger()
-        res=imm.readMemory( regs['ESP'] + 4, 0xc)
-        if len(res) != 0xc:
-            self.window.Log("(-) RtlFreeHeap: the stack seems to broken, unable to get args")
-            return 0x0
-        (heap, flags, size) = struct.unpack("LLL", res)
-        if heap == self.Heap:
-            self.window.Log("(+) RtlFreeHeap(0x%08x, 0x%08x, 0x%08x)" % (heap, flags, size))
-
-class RtlFreeHeapHook_ret(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
         
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        return_value = regs['EAX']
-        self.window.Log("(+) RtlFreeHeap() returned: 0x%08x" % (return_value)) 
-        self.window.Log("-" * 30)
-                     
-# RtlAllocateHeap Hook class
-
-class RtlAllocateHeapHook(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        imm = immlib.Debugger()
-        res=imm.readMemory( regs['ESP'] + 4, 0xc)
-        if len(res) != 0xc:
-            self.window.Log("RtlAllocateHeap: ESP seems to broken, unable to get args")
-            return 0x0
-        (heap, flags, size) = struct.unpack("LLL", res)
-        if heap == self.Heap:
-            self.window.Log("(+) RtlAllocateHeap(0x%08x, 0x%08x, 0x%08x)" % (heap, flags, size)) 
+        # get the return address of the hooked function
+        offset = 0x0
+        if self.fname == "VirtualAllocEx":
+            offset = 0x1c
+        elif self.fname == "VirtualFreeEx":
+            offset = 0x18
+        elif self.fname == "RtlDestroyHeap" or self.fname == "RtlInitializeCriticalSection":
+            offset = 0x0c
             
-class RtlAllocateHeapHook_ret(LogBpHook):
-    def __init__(self, heap, window):
+        ret = imm.readMemory( regs['ESP']+offset, 0x4)
+        ret = struct.unpack("L", ret)
+        
+        # find the module with the ret address
+        module_list = imm.getAllModules()
+        for mod in module_list.iterkeys():
+            find = False
+            for addy in range(module_list[mod].getCodebase(),(module_list[mod].getCodebase()+module_list[mod].getCodesize())):
+                if int(ret[0]) == addy:
+                    find = True
+                    break
+            if find: 
+                break
+
+        if self.fname == "RtlFreeHeap":
+            res=imm.readMemory( regs['ESP'] + 4, 0xc)
+            if len(res) != 0xc:
+                self.window.Log("(-) RtlFreeHeap: the stack seems to broken, unable to get args")
+                return 0x0
+            (self.rheap, flags, size) = struct.unpack("LLL", res)
+            if self.heap:
+                if self.heap == self.rheap:
+                    rheap = True
+                    self.window.Log("(+) RtlFreeHeap(0x%08x, 0x%08x, 0x%08x)" % (self.rheap, flags, size))
+            else:
+                self.window.Log("(+) RtlFreeHeap(0x%08x, 0x%08x, 0x%08x)" % (self.rheap, flags, size))
+        elif self.fname == "RtlAllocateHeap":
+            res=imm.readMemory( regs['ESP'] + 4, 0xc)
+            if len(res) != 0xc:
+                self.window.Log("RtlAllocateHeap: ESP seems to broken, unable to get args")
+                return 0x0
+            (self.rheap, flags, size) = struct.unpack("LLL", res)
+            if self.heap:
+                if self.heap == self.rheap:
+                    rheap = True
+                    self.window.Log("(+) RtlAllocateHeap(0x%08x, 0x%08x, 0x%08x)" % (self.rheap, flags, size))
+            else:
+                self.window.Log("(+) RtlAllocateHeap(0x%08x, 0x%08x, 0x%08x)" % (self.rheap, flags, size))
+                
+        elif self.fname == "RtlCreateHeap":
+            res=imm.readMemory( regs['ESP'] + 4, 0xc)
+            if len(res) != 0xc:
+                self.window.Log("(-) RtlFreeHeap: the stack seems to broken, unable to get args")
+                return 0x0
+            (flags, InitialSize, MaximumSize) = struct.unpack("LLL", res)
+            self.window.Log("(+) RtlCreate(0x%08x, 0x%08x, 0x%08x)" % (flags, InitialSize, MaximumSize))
+        elif self.fname == "RtlDestroyHeap":
+            res=imm.readMemory( regs['ESP'] + 4, 0x4)
+            if len(res) != 0x4:
+                self.window.Log("(-) RtlDestroyHeap: the stack seems to broken, unable to get args")
+                return 0x0
+            (heap) = struct.unpack("L", res)
+            self.window.Log("(+) RtlDestroyHeap(0x%08x)" % (heap))
+            
+        elif self.fname == "RtlReAllocateHeap":    
+            res=imm.readMemory( regs['ESP'] + 4, 0x10)
+            if len(res) != 0x10:
+                self.window.Log("(-) RtlReAllocateHeap: the stack seems to broken, unable to get args")
+                return 0x0
+            (heap, dwFlags, lpMem, dwBytes) = struct.unpack("LLLL", res)
+            self.window.Log("(+) RtlReAllocateHeap(0x%08x, 0x%08x, 0x%08x, 0x%08x)" % (heap, dwFlags, lpMem, dwBytes))                  
+        elif self.fname == "RtlSizeHeap": 
+            res=imm.readMemory( regs['ESP'] + 4, 0xc)
+            if len(res) != 0xc:
+                self.window.Log("(-) RtlSizeHeap: the stack seems to broken, unable to get args")
+                return 0x0
+            (heap, dwFlags, lpMem) = struct.unpack("LLL", res)
+            self.window.Log("(+) RtlSizeHeap(0x%08x, 0x%08x, 0x%08x)" % (heap, dwFlags, lpMem))
+        elif self.fname == "RtlInitializeCriticalSection" or self.fname == "RtlDeleteCriticalSection":
+            res=imm.readMemory( regs['ESP'] + 4, 0x4)
+            if len(res) != 0x4:
+                self.window.Log("(-) %s: the stack seems to broken, unable to get args" % self.fname)
+                return 0x0
+            (cs) = struct.unpack("L", res)
+            self.window.Log("(+) %s(0x%08x)" % (self.fname,cs[0]))
+        elif self.fname == "SetUnhandledExceptionFilter":
+            res=imm.readMemory( regs['ESP'] + 4, 0x4)
+            if len(res) != 0x4:
+                self.window.Log("(-) SetUnhandledExceptionFilter: the stack seems to broken, unable to get args")
+                return 0x0
+            (pTopLevelFilter) = struct.unpack("L", res)
+            self.window.Log("(+) SetUnhandledExceptionFilter(0x%08x)" % (pTopLevelFilter))
+            
+        elif self.fname == "VirtualAllocEx":
+            res=imm.readMemory( regs['ESP'] + 0x8, 0x10)
+            if len(res) != 0x10:
+                self.window.Log("(-) VirtualAllocEx: the stack seems to broken, unable to get args")
+                return 0x0
+            (address, size, AllocationType, Protect) = struct.unpack("LLLL", res)
+            self.window.Log("(+) VirtualAllocEx(0x%08x, 0x%08x, 0x%08x, 0x%08x)" % (address, size, AllocationType, Protect))            
+        elif self.fname == "VirtualFreeEx":
+            res=imm.readMemory( regs['ESP'] + 0x8, 0x0c)
+            if len(res) != 0x0c:
+                self.window.Log("(-) VirtualFreeEx: the stack seems to broken, unable to get args")
+                return 0x0
+            (lpAddress, dwSize, dwFreeType) = struct.unpack("LLL", res)
+            self.window.Log("(+) VirtualFreeEx(0x%08x, 0x%08x, 0x%08x)" % (lpAddress, dwSize, dwFreeType))
+        if self.heap:
+            if self.heap == self.rheap:    
+                self.window.Log("(+) Called from 0x%08x - module: %s" % (ret[0],module_list[mod].getPath()))
+        else:
+            self.window.Log("(+) Called from 0x%08x - module: %s" % (ret[0],module_list[mod].getPath()))
+
+    def is_heap_alloc_free_matching(self):
+        return self.heap == self.rheap
+            
+class function_hook_ret(LogBpHook):
+    def __init__(self, window, function_name, heap=False):
         LogBpHook.__init__(self)
-        self.Heap = heap
         self.window = window
+        self.fname = function_name
+        self.heap = heap
         
     def run(self,regs):
         """This will be executed when hooktype happens"""
-        return_value = regs['EAX']
-        self.window.Log("(+) RtlAllocateHeap() returned: 0x%08x" % (return_value)) 
+        # our flag is set for each call
+        if rheap:
+            return_value = regs['EAX']
+            self.window.Log("(+) %s() returned: 0x%08x" % (self.fname, return_value)) 
+        else:
+            self.window.Log("(+) Detected alternate %s() call" % (self.fname))
+        
         self.window.Log("-" * 30)
-        
-class RtlCreateHeap(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        imm = immlib.Debugger()
-        res=imm.readMemory( regs['ESP'] + 4, 0xc)
-        if len(res) != 0xc:
-            self.window.Log("(-) RtlFreeHeap: the stack seems to broken, unable to get args")
-            return 0x0
-        (flags, InitialSize, MaximumSize) = struct.unpack("LLL", res)
-        self.window.Log("(+) RtlCreate(0x%08x, 0x%08x, 0x%08x)" % (flags, InitialSize, MaximumSize))
 
-class RtlCreateHeap_ret(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
+# HeapHook_vals, HeapHook_ret,         
+def hook_on(imm, LABEL, bp_address, function_name, bp_retaddress, Disable, window, heap=False):
+    """
+    this function creates the hooks and adds/deletes them to the instance of immdbg depending on
+    if they exist in immunities knowledge database
+    
+    arguments:
+    - obj imm
+    - constant LABEL
+    - obj HeapHook_vals (hooking class)
+    - obj HeapHook_ret (hooking class)
+    - int bp_address (function entry address)
+    - int bp_retaddress (function exit address)
+    - boolean Disable (disable hook or not)
+    - obj window
+    
+    return:
+    - String showing if hook succeeded or not  
+    """
+    if not heap:
+        heap = 0x00000000
         
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        return_value = regs['EAX']
-        self.window.Log("(+) RtlCreateHeap() returned: 0x%08x" % (return_value)) 
-        self.window.Log("-" * 30)
-        
-class RtlDestroyHeap(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        imm = immlib.Debugger()
-        res=imm.readMemory( regs['ESP'] + 4, 0x4)
-        if len(res) != 0x4:
-            self.window.Log("(-) RtlDestroyHeap: the stack seems to broken, unable to get args")
-            return 0x0
-        (heap) = struct.unpack("L", res)
-        self.window.Log("(+) RtlDestroyHeap(0x%08x)" % (heap))
-
-class RtlDestroyHeap_ret(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        return_value = regs['EAX']
-        self.window.Log("(+) RtlDestroyHeap() returned: 0x%08x" % (return_value)) 
-        self.window.Log("-" * 30)
-             
-class RtlReAllocateHeap(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        imm = immlib.Debugger()
-        res=imm.readMemory( regs['ESP'] + 4, 0x10)
-        if len(res) != 0x10:
-            self.window.Log("(-) RtlReAllocateHeap: the stack seems to broken, unable to get args")
-            return 0x0
-        (heap, dwFlags, lpMem, dwBytes) = struct.unpack("LLLL", res)
-        self.window.Log("(+) RtlDestroyHeap(0x%08x, 0x%08x, 0x%08x, 0x%08x)" % (heap, dwFlags, lpMem, dwBytes))
-
-class RtlReAllocateHeap_ret(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        return_value = regs['EAX']
-        self.window.Log("(+) RtlReAllocateHeap() returned: 0x%08x" % (return_value)) 
-        self.window.Log("-" * 30)   
-        
-class RtlSizeHeap(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        imm = immlib.Debugger()
-        res=imm.readMemory( regs['ESP'] + 4, 0xc)
-        if len(res) != 0xc:
-            self.window.Log("(-) RtlSizeHeap: the stack seems to broken, unable to get args")
-            return 0x0
-        (heap, dwFlags, lpMem) = struct.unpack("LLL", res)
-        self.window.Log("(+) RtlSizeHeap(0x%08x, 0x%08x, 0x%08x)" % (heap, dwFlags, lpMem))
-
-class RtlSizeHeap_ret(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        return_value = regs['EAX']
-        self.window.Log("(+) RtlSizeHeap() returned: 0x%08x" % (return_value)) 
-        self.window.Log("-" * 30)
-
-class RtlInitializeCriticalSection(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        imm = immlib.Debugger()
-        res=imm.readMemory( regs['ESP'] + 4, 0x4)
-        if len(res) != 0x4:
-            self.window.Log("(-) RtlInitializeCriticalSection: the stack seems to broken, unable to get args")
-            return 0x0
-        (cs) = struct.unpack("L", res)
-        self.window.Log("(+) RtlInitializeCriticalSection(0x%08x)" % (cs))
-
-class RtlInitializeCriticalSection_ret(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        return_value = regs['EAX']
-        self.window.Log("(+) RtlInitializeCriticalSection() returned: 0x%08x" % (return_value)) 
-        self.window.Log("-" * 30)          
-
-class RtlDeleteCriticalSection(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        imm = immlib.Debugger()
-        res=imm.readMemory( regs['ESP'] + 4, 0x4)
-        if len(res) != 0x4:
-            self.window.Log("(-) RtlDeleteCriticalSection: the stack seems to broken, unable to get args")
-            return 0x0
-        (cs) = struct.unpack("L", res)
-        self.window.Log("(+) RtlDeleteCriticalSection(0x%08x)" % (cs))
-
-class RtlDeleteCriticalSection_ret(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        return_value = regs['EAX']
-        self.window.Log("(+) RtlDeleteCriticalSection() returned: 0x%08x" % (return_value)) 
-        self.window.Log("-" * 30)          
-                                                  
-class SetUnhandledExceptionFilter(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        imm = immlib.Debugger()
-        res=imm.readMemory( regs['ESP'] + 4, 0x4)
-        if len(res) != 0x4:
-            self.window.Log("(-) SetUnhandledExceptionFilter: the stack seems to broken, unable to get args")
-            return 0x0
-        (pTopLevelFilter) = struct.unpack("L", res)
-        self.window.Log("(+) SetUnhandledExceptionFilter(0x%08x)" % (pTopLevelFilter))
-
-class SetUnhandledExceptionFilter_ret(LogBpHook):
-    def __init__(self, heap, window):
-        LogBpHook.__init__(self)
-        self.Heap = heap
-        self.window = window
-        
-    def run(self,regs):
-        """This will be executed when hooktype happens"""
-        return_value = regs['EAX']
-        self.window.Log("(+) SetUnhandledExceptionFilter() returned: 0x%08x" % (return_value)) 
-        self.window.Log("-" * 30) 
-        
-def hook_on(imm, heap, LABEL, HeapHook_vals, HeapHook_ret, bp_address, bp_retaddress, Disable, window):
-    hookalloc_vals = imm.getKnowledge( LABEL + "_%08x_values" % heap )
-    hookalloc_ret = imm.getKnowledge( LABEL + "_%08x_ret" % heap )
+    hook_values = imm.getKnowledge( LABEL + "%x_values" % heap)
+    hook_ret_address = imm.getKnowledge( LABEL + "%x_ret" % heap)
     if Disable:
-        if not hookalloc_vals:
-            window.Log("(-) Error %s: No hook for heap 0x%08x to disable" % (LABEL, heap))
-            return "No hook to disable on"
-        elif not hookalloc_ret:
-            window.Log("(-) Error %s: No hook for heap 0x%08x to disable" % (LABEL, heap))
-            return "No hook to disable on"
+        if not hook_values:
+            window.Log("(-) Error %s: No hook to disable!" % (LABEL))
+            return "(-) No hook to disable on"
+        elif not hook_ret_address:
+            window.Log("(-) Error %s: No hook to disable!" % (LABEL))
+            return "(-) No hook to disable on"
         else:
-            hookalloc_vals.UnHook()
-            hookalloc_ret.UnHook()
+            hook_values.UnHook()
+            hook_ret_address.UnHook()
             window.Log("(+) UnHooked %s" % LABEL)
-            imm.forgetKnowledge( LABEL + "_%08x_values" % heap )
-            imm.forgetKnowledge( LABEL + "_%08x_ret" % heap )
-            return "Unhooked" 
+            imm.forgetKnowledge( LABEL + "_values")
+            imm.forgetKnowledge( LABEL + "_ret")
+            return "Unhooked"
     else:
-        if not hookalloc_vals:
-            hookalloc_vals= HeapHook_vals( heap , window)
-            hookalloc_vals.add( LABEL + "_%08x_values" % heap, bp_address)
+        if not hook_values:
+            if heap != 0:
+                hook_values= function_hook( window, function_name, heap)
+            else:
+                hook_values= function_hook( window, function_name)
+                
+            #window.Log("match? %s" % hook_values.is_heap_alloc_free_matching())
             
+            hook_values.add( LABEL + "%x_values" % heap, bp_address)
             window.Log("(+) Placed %s to retrieve the variables" % LABEL)
-            imm.addKnowledge( LABEL + "_%08x_values" % heap, hookalloc_vals )
+            
+            imm.addKnowledge( LABEL + "%x_values" % heap, hook_values)
         else:
-            window.Log("(?) HookAlloc for heap 0x%08x is already running" % heap)
-        if not hookalloc_ret:
-            hookalloc_ret= HeapHook_ret( heap , window)
-            hookalloc_ret.add( LABEL + "_%08x_ret" % heap, bp_retaddress)
+            window.Log("(?) HookAlloc for heap 0x%08x is already running")
+        if not hook_ret_address:
+            if heap != 0:   
+                hook_ret_address= function_hook_ret( window, function_name, heap)
+            else:
+                hook_ret_address= function_hook_ret( window, function_name)
+            hook_ret_address.add( LABEL + "_ret", bp_retaddress)
             
             window.Log("(+) Placed %s to retrieve the return value" % LABEL)
-            imm.addKnowledge( LABEL + "_%08x_ret" % heap, hookalloc_ret )            
+            imm.addKnowledge( LABEL + "%x_ret" % heap, hook_ret_address )            
         else:
-            window.Log("(?) HookAlloc for heap 0x%08x is already running" % heap)
+            window.Log("(?) HookAlloc is already running")
         return "Hooked"
 
-# banners heh
+# banners
+# =======
 def banner(imm):
     imm.log("----------------------------------------",highlight=1) 
     imm.log("    __                         ",highlight=1)
@@ -508,7 +442,7 @@ def usage(imm):
     imm.log("analysechunks <heap> / ac <heap>      : analyse a particular heap's chunks")
     imm.log("analyseheapcache <heap> / ahc <heap>  : analyse a particular heap's cache (FreeList[0])")
     imm.log("freelistinuse <heap> / fliu <heap>    : analyse/patch the FreeListInUse structure")
-    imm.log("hook <heap> / hook -h <func>          : Hook various functions that create/destroy/manipulate a heap")
+    imm.log("hook <heap> / h -h <func>             : Hook various functions that create/destroy/manipulate a heap")
     imm.log("")
     imm.log("Want more info about a given command? Run !heaper help <command>",highlight=1)
     imm.log("")
@@ -523,7 +457,7 @@ def get_extended_usage():
     extusage["dumppeb"] = "\ndumppeb / dp : Return the PEB entry address\n"
     extusage["dumppeb"] += "---------------------------------------------\n"
     extusage["dumppeb"] += "Use -m to view the PEB management structure\n"
-    extusage["hook"] = "\nhook <heap> / hook : Hook various functions that create/destroy/manipulate a heap\n"
+    extusage["hook"] = "\nhook <heap> / h : Hook various functions that create/destroy/manipulate a heap\n"
     extusage["hook"] += "---------------------------------------------\n"
     extusage["hook"] += "Use -h to hook any function.\n"
     extusage["hook"] += "Use -u to unhook any function.\n"
@@ -537,6 +471,8 @@ def get_extended_usage():
     extusage["hook"] += "- RtlInitializeCriticalSection() [createcs]\n"
     extusage["hook"] += "- RtlDeleteCriticalSection()     [deletecs]\n"
     extusage["hook"] += "- SetUnhandledExceptionFilter()  [setuef]\n"
+    extusage["hook"] += "- VirtualAllocEx()               [va]\n"
+    extusage["hook"] += "- VirtualFreeEx()                [vf]\n"    
     extusage["hook"] += "- Hook all!                      [all]\n"
     extusage["hook"] += "eg: !heaper hook 0x00150000 -h realloc\n"
     extusage["hook"] += "eg: !heaper hook -u all\n"
@@ -582,20 +518,32 @@ def get_extended_usage():
     extusage["dumpfunctionpointers"] += "eg: !heaper dfp -r 005000f0\n"
     return extusage
     
-def setUpArgs():
+def set_up_usage():
     cmds = {}
     cmds["dumppeb"] = set_command("dumppeb", "Dump the PEB pointers",get_extended_usage()["dumppeb"], "dp")
+    cmds["dp"] = set_command("dumppeb", "Dump the PEB pointers",get_extended_usage()["dumppeb"], "dp")
     cmds["dumpteb"] = set_command("dumpteb", "Dump the TEB pointers",get_extended_usage()["dumpteb"], "dt")
+    cmds["dt"] = set_command("dumpteb", "Dump the TEB pointers",get_extended_usage()["dumpteb"], "dt")
     cmds["dumpheaps"] = set_command("dumpheaps", "Dump all the heaps of a process",get_extended_usage()["dumpheaps"], "dh")
+    cmds["dh"] = set_command("dumpheaps", "Dump all the heaps of a process",get_extended_usage()["dumpheaps"], "dh")
     cmds["dumpfunctionpointers"] = set_command("dumpfunctionpointers", "Dump all the function pointers of the current process",get_extended_usage()["dumpfunctionpointers"], "dfp")
+    cmds["dfp"] = set_command("dumpfunctionpointers", "Dump all the function pointers of the current process",get_extended_usage()["dumpfunctionpointers"], "dfp")
     cmds["analyseheap"] = set_command("analyseheap", "analyse a particular heap",get_extended_usage()["analyseheap"], "ah")
+    cmds["ah"] = set_command("analyseheap", "analyse a particular heap",get_extended_usage()["analyseheap"], "ah")
     cmds["analyselal"] = set_command("analyselal", "analyse a particular heap's lookaside list",get_extended_usage()["analyselal"], "al")
+    cmds["al"] = set_command("analyselal", "analyse a particular heap's lookaside list",get_extended_usage()["analyselal"], "al")
     cmds["analysefreelist"] = set_command("analysefreelist", "analyse a particular heap's freelist",get_extended_usage()["analysefreelist"], "af")
+    cmds["af"] = set_command("analysefreelist", "analyse a particular heap's freelist",get_extended_usage()["analysefreelist"], "af")
     cmds["analysechunks"] = set_command("analysechunks", "analyse a particular heap's list of chunks",get_extended_usage()["analysechunks"], "ac")
+    cmds["ac"] = set_command("analysechunks", "analyse a particular heap's list of chunks",get_extended_usage()["analysechunks"], "ac")
     cmds["analysesegments"] = set_command("analysesegments", "analyse a particular heap's segment(s)",get_extended_usage()["analysesegments"], "as")
+    cmds["as"] = set_command("analysesegments", "analyse a particular heap's segment(s)",get_extended_usage()["analysesegments"], "as")
     cmds["analyseheapcache"] = set_command("analyseheapcache", "analyse a particular heap's cache (FreeList[0])",get_extended_usage()["analyseheapcache"], "ahc")
+    cmds["ahc"] = set_command("analyseheapcache", "analyse a particular heap's cache (FreeList[0])",get_extended_usage()["analyseheapcache"], "ahc")
     cmds["freelistinuse"] = set_command("freelistinuse", "analyse/patch the FreeListInUse structure",get_extended_usage()["freelistinuse"], "fliu")
-    cmds["hook"] = set_command("hook", "Hook various functions that create/destroy/manipulate a heap",get_extended_usage()["hook"], "hook")
+    cmds["fliu"] = set_command("freelistinuse", "analyse/patch the FreeListInUse structure",get_extended_usage()["freelistinuse"], "fliu")
+    cmds["hook"] = set_command("hook", "Hook various functions that create/destroy/manipulate a heap",get_extended_usage()["hook"], "h")
+    cmds["h"] = set_command("hook", "Hook various functions that create/destroy/manipulate a heap",get_extended_usage()["hook"], "h")
     return cmds
 
 # TODO: build heuristics to detect exploitable paths...
@@ -1204,8 +1152,6 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                     chunk_address  = fc[0]
                     chunk_blink = fc[1]
                     chunk_flink = fc[2]
-                    # read the chunks size
-                    
                     try:
                         sz = pheap.get_chunk( chunk_address - block ).size
                         # avoid freelist[0] as it can be anything > 1016
@@ -1443,6 +1389,18 @@ def dump_function_pointers(window, imm, writable_segment, patch=False, restore=F
 
 # TODO: tidy up with struct (shorten/optimize the code)
 def dump_segment_structure(pheap, window, imm, heap):
+    """
+    allows the user to dump the segment structure(s) from a heap
+    
+    arguments:
+    - obj heap
+    - obj window
+    - obj imm
+    - int heap
+    
+    return:
+    - string showing the segment is dumped
+    """
     for segment in pheap.Segments:
         window.Log("")
         window.Log("-" * 19)
@@ -1531,6 +1489,17 @@ def dump_segment_structure(pheap, window, imm, heap):
     return "(+) Dumped all Heap Segmements in heap 0x%08x" % heap
 
 def analyse_heap(heap, imm, window):
+    """
+    allows you to dump the _heap structure
+    
+    arguments: 
+    - int heap
+    - obj imm
+    - obj window
+    
+    return:
+    - string showing the heap is dumped
+    """
     if heap and ( heap in imm.getHeapsAddress() ):
         i = 0 
         v = 0
@@ -1550,7 +1519,7 @@ def analyse_heap(heap, imm, window):
         window.Log("+0x028 Total Free Size                : 0x%08x" % pheap.TotalFreeSize, pheap.TotalFreeSize)
         window.Log("+0x02c MaximumAllocationSize          : 0x%08x" % pheap.MaximumAllocationSize, pheap.MaximumAllocationSize)
                     
-        # libheap do not have this member, so we do it manually..
+        # libheap does not have some members, so we are on our own
         ProcessHeapsListIndex = imm.readMemory(heap+0x30, 2)
         ProcessHeapsListIndex = reverse(ProcessHeapsListIndex)
         ProcessHeapsListIndex = int(binascii.hexlify(ProcessHeapsListIndex),16)
@@ -1561,6 +1530,7 @@ def analyse_heap(heap, imm, window):
         window.Log("+0x038 NextAvailableTagIndex          : 0x%08x" % pheap.NextAvailableTagIndex, pheap.NextAvailableTagIndex)
         window.Log("+0x03a MaximumTagIndex                : 0x%08x" % pheap.MaximumTagIndex, pheap.MaximumTagIndex)
         window.Log("+0x03c TagEntries                     : 0x%08x" % pheap.TagEntries, pheap.TagEntries)
+        # uncommited range segments
         window.Log("+0x040 UCRSegments                    : 0x%08x" % pheap.UCRSegments, pheap.UCRSegments)
         window.Log("+0x044 UnusedUncommittedRanges        : 0x%08x" % pheap.UnusedUnCommittedRanges, pheap.UnusedUnCommittedRanges)
         window.Log("+0x048 AlignRound                     : 0x%08x" % pheap.AlignRound, pheap.AlignRound)
@@ -1575,8 +1545,7 @@ def analyse_heap(heap, imm, window):
         for segment in pheap.Segments:
             i += 1
             window.Log("       Segment %d                      : 0x%08x" % (i,segment.BaseAddress), segment.BaseAddress)
-                    
-        # libheap does not have this member, so we do it manually..
+
         FreelistBitmap = imm.readMemory(heap+0x158, 4)
         FreelistBitmap = reverse(FreelistBitmap)
         FreelistBitmap = int(binascii.hexlify(FreelistBitmap),16)  
@@ -1595,7 +1564,6 @@ def analyse_heap(heap, imm, window):
         window.Log("+0x578 LockVariable                   : 0x%08x" % pheap.LockVariable, pheap.LockVariable)
         window.Log("+0x57c CommitRoutine                  : 0x%08x" % pheap.CommitRoutine, pheap.CommitRoutine)
                     
-        # and the rest..
         FrontEndHeap = imm.readMemory(heap+0x580, 4)
         FrontEndHeap = reverse(FrontEndHeap)
         FrontEndHeap = int(binascii.hexlify(FrontEndHeap),16)
@@ -1616,7 +1584,10 @@ def analyse_heap(heap, imm, window):
         window.Log("+0x584 FrontHeapLockCount             : 0x%08x" % FrontHeapLockCount, FrontHeapLockCount)
         window.Log("+0x586 FrontEndHeapType               : 0x%08x" % FrontEndHeapType, FrontEndHeapType)
         window.Log("+0x587 LastSegmentIndex               : 0x%08x" % LastSegmentIndex, LastSegmentIndex)    
+    return "(+) Dumped the heap structure 0x%08x" % heap
 
+# main entry
+# ==========
 def main(args):
     imm = immlib.Debugger()
     if not args:
@@ -1625,65 +1596,22 @@ def main(args):
     banner(imm)
     
     if len(args) > 1:
-        cmds = setUpArgs()
+        cmds = set_up_usage()
+        # show the user how to do things
+        # ==============================
         if args[0].lower().strip() == "help":
             if args[1].lower().strip() in available_commands:
-                # teach them how to do stuff
-                if args[1].lower().strip() == "dumppeb" or args[1].lower().strip() == "dp":
-                    usageText = cmds["dumppeb"].usage.split("\n")
-                    for line in usageText:
-                        imm.log(line)
-                elif args[1].lower().strip() == "dumpteb" or args[1].lower().strip() == "dt":
-                    usageText = cmds["dumpteb"].usage.split("\n")
-                    for line in usageText:
-                        imm.log(line)
-                elif args[1].lower().strip() == "dumpheaps" or args[1].lower().strip() == "dh":
-                    usageText = cmds["dumpheaps"].usage.split("\n")
-                    for line in usageText:
-                        imm.log(line)
-                elif args[1].lower().strip() == "dumpfunctionpointers" or args[1].lower().strip() == "dfp":
-                    usageText = cmds["dumpfunctionpointers"].usage.split("\n")
-                    for line in usageText:
-                        imm.log(line)
-                elif args[1].lower().strip() == "analyseheap" or args[1].lower().strip() == "ah":
-                    usageText = cmds["analyseheap"].usage.split("\n")
-                    for line in usageText:
-                        imm.log(line)
-                elif args[1].lower().strip() == "analysefreelist" or args[1].lower().strip() == "af":
-                    usageText = cmds["analysefreelist"].usage.split("\n")
-                    for line in usageText:
-                        imm.log(line)
-                elif args[1].lower().strip() == "analyselal" or args[1].lower().strip() == "al":
-                    usageText = cmds["analyselal"].usage.split("\n")
-                    for line in usageText:
-                        imm.log(line)
-                elif args[1].lower().strip() == "analysechunks" or args[1].lower().strip() == "ac":
-                    usageText = cmds["analysechunks"].usage.split("\n")
-                    for line in usageText:
-                        imm.log(line)
-                elif args[1].lower().strip() == "analysesegments" or args[1].lower().strip() == "as":
-                    usageText = cmds["analysesegments"].usage.split("\n")
-                    for line in usageText:
-                        imm.log(line)
-                elif args[1].lower().strip() == "analyseheapcache" or args[1].lower().strip() == "ahc":
-                    usageText = cmds["analyseheapcache"].usage.split("\n")
-                    for line in usageText:
-                        imm.log(line)
-                elif args[1].lower().strip() == "freelistinuse" or args[1].lower().strip() == "fliu":
-                    usageText = cmds["freelistinuse"].usage.split("\n")
-                    for line in usageText:
-                        imm.log(line)
-                elif args[1].lower().strip() == "hook":
-                    usageText = cmds["hook"].usage.split("\n")
-                    for line in usageText:
-                        imm.log(line)
+                
+
+                usageText = cmds[args[1].lower().strip()].usage.split("\n")
+                for line in usageText:
+                    imm.log(line)
                 return "(+) Good luck!"
             else:
                 usage(imm)
-                return "Invalid command specified!"
+                return "(-) Invalid command specified!"
     
     if len(args) >= 1:
-        # ensure we dont keep opening windows
         if not opennewwindow:            
             window = imm.getKnowledge(tag)
             if window and not window.isValidHandle():
@@ -1696,7 +1624,8 @@ def main(args):
                 imm.addKnowledge(tag, window, force_add = 1)
         win_banner(window)
         
-    # functions are only require one argument
+    # commands that only require one argument
+    # =======================================
     if len(args) == 1:
         if args[0].lower().strip() in available_commands:
             if args[0].lower().strip() == "dumpheaps" or args[0].lower().strip() == "dh":
@@ -1707,8 +1636,9 @@ def main(args):
                 return dump_teb(imm,window)
             elif args[0].lower().strip() == "help" or args[0].lower().strip() == "-h":
                 return usage(imm)
+            
+            # dump function pointers from the parent processes .data segment
             elif args[0].lower().strip() == "dumpfunctionpointers" or args[0].lower().strip() == "dfp":
-                # default debugged processes .data segment
                 writable_segment = 0x00000000
                 writable_segment_size = 0x0
                 for addr in imm.getMemoryPageByOwner(imm.getDebuggedName()):
@@ -1724,12 +1654,13 @@ def main(args):
                 window.Log("-" * 60)
                 dump_function_pointers(window, imm, writable_segment)
             else:
-                return "Invalid number of arguments"
+                return "(-) Invalid number of arguments"
         else:
             usage(imm)
-            return "Invalid command specified!"
+            return "(-) Invalid command specified!"
     
-    # the main entry into the arguments...
+    # the main entry into the arguments
+    # =================================
     elif len(args) >= 2:
         graphic_structure = False
         custfilename = False
@@ -1737,7 +1668,8 @@ def main(args):
                 if args[1] == "-m":
                     dump_peb(imm,window,True)
                     
-        # assume its a heap address the second arg
+        # commands that require use of a heap
+        # ===================================
         if (args[0].lower().strip() in available_commands and args[0].lower().rstrip() != "help" 
             and args[0].lower().rstrip() != "-h"):
                         
@@ -1751,7 +1683,8 @@ def main(args):
                     except:
                         return "no filename specified"   
 
-            # analyse a heap (heap structure)
+            # analyse a heap structure
+            # ========================
             if args[0].lower().strip() == "analyseheap" or args[0].lower().strip() == "ah":
                 try:
                     heap = args[1].lower().strip()
@@ -1762,6 +1695,7 @@ def main(args):
                 analyse_heap(heap, imm, window)
             
             # analyse the lookaside list
+            # ==========================
             elif args[0].lower().strip() == "analyselal" or args[0].lower().strip() == "al":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -1783,6 +1717,7 @@ def main(args):
                     window.Log("Lookaside list analyse not supported under Windows Vista and above")
             
             # analyse freelists
+            # =================
             elif args[0].lower().strip() == "analysefreelist" or args[0].lower().strip() == "af":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -1810,15 +1745,14 @@ def main(args):
                         
                     dump_FreeListInUse(pheap, window)
                     
-                    # TODO: hueristics
+                    # TODO: finish hueristics
                     window.Log("")
                     window.Log("-" * 46)
                     window.Log("Performing heuristics against corrupted chunks")
                     window.Log("-" * 46)
                     vuln_chunks = 0  
                     for knowledge in imm.listKnowledge():
-                        # match on the freelist chunks we added either 
-                        # (should ideally be only one corrupt chunk in the freelist
+                        # match on all the freelist[0] chunks we added earlier 
                         if re.match("FreeList0_chunk_",knowledge):
                             vuln_chunks += freelist0_heuristics(window, knowledge, pheap, imm, "freelist", vuln_chunks)
                     window.Log("")
@@ -2010,11 +1944,11 @@ def main(args):
                 pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
                 dump_segment_structure(pheap, window, imm, heap)
                 
-            # TODO: finish hooking..
-            elif args[0].lower().strip() == "hook":
+            elif args[0].lower().strip() == "hook" or args[0].lower().strip() == "h":
                 window.Log("")
                 valid_functions = ["alloc", "free", "create","destroy","realloc","size","createcs","deletecs","all","setuef"]
                 # flags
+                FilterHeap = False
                 Disable = False
                 AllocFlag = False
                 FreeFlag = False
@@ -2025,41 +1959,71 @@ def main(args):
                 CreateCSFlag = False
                 DeleteCSFlag = False
                 setuefFlag = False
+                setVAllocFlag = False
+                setVFreeFlag = False
                 
                 if len(args) > 2:
-                    if len(args) == 4:
+                    if (args[2].lower().strip() == "-h" or args[2].lower().strip() == "-u"):
+                        FilterHeap = True
                         try:
                             pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
                         except:
-                            window.Log("Invalid heap address!")
-                            return "Invalid heap address!"
-                        if args[2] == "-h" or args[2] == "-u":
-                            if args[2] == "-u":
-                                Disable = True
-                            if args[3].lower().strip() in valid_functions:
-                                if args[3].lower().strip() == "alloc":
-                                    AllocFlag = True
-                                elif args[3].lower().strip() == "free":
-                                    FreeFlag = True
-                                elif args[3].lower().strip() == "create":
-                                    window.Log("(-) You do not need to specify a heap to hook/unhook RtlCreateHeap()!")
-                                    return "You do not need to specify a heap to hook/unhook RtlCreateHeap()!"
-                                elif args[3].lower().strip() == "destroy":
-                                    window.Log("(-) You do not need to specify a heap to hook/unhook RtlDestroyHeap()!")
-                                    return "You do not need to specify a heap to hook/unhook RtlDestroyHeap()!" 
-                                elif args[3].lower().strip() == "setuef":
-                                    window.Log("(-) You do not need to specify a heap to hook/unhook SetUnhandledExceptionFilter()!")
-                                    return "You do not need to specify a heap to hook/unhook SetUnhandledExceptionFilter()!" 
-                                elif args[3].lower().strip() == "realloc":
-                                    ReAllocFlag = True
-                                elif args[3].lower().strip() == "size":
-                                    sizeFlag = True
-                                elif args[3].lower().strip() == "createcs":
-                                    CreateCSFlag = True
-                                elif args[3].lower().strip() == "deletecs":
-                                    DeleteCSFlag = True
-                                # yep, crazy mofo
-                                elif args[3].lower().strip() == "all":
+                            window.Log("(-) Invalid heap address!")
+                            return "(-) Invalid heap address!"
+                        if args[3].lower().strip() in valid_functions:
+                            if args[3].lower().strip() == "alloc":
+                                AllocFlag = True
+                            elif args[3].lower().strip() == "free":
+                                FreeFlag = True
+                            elif args[3].lower().strip() == "all":
+                                AllocFlag = True
+                                FreeFlag = True
+                                CreateFlag = True
+                                DestroyFlag = True
+                                ReAllocFlag = True
+                                sizeFlag = True
+                                CreateCSFlag = True
+                                DeleteCSFlag = True
+                                setuefFlag = True 
+                                setVAllocFlag = True
+                                setVFreeFlag = True                                                         
+                                        
+                    elif (args[1].lower().strip() == "-h" or args[1].lower().strip() == "-u"):
+                        # just set it on the default heap if the user fails
+                        # to supply a heap address
+                        
+                        if args[1].lower().strip() == "-u":
+                            Disable = True
+                        
+                        if args[2].lower().strip() not in valid_functions:
+                            window.Log("(-) Please include a valid function to hook that doesnt require a heap")
+                            return "(-) Please include a valid function to hook that doesnt require a heap"   
+                                                                      
+                        elif args[2].lower().strip() == "create":
+                            CreateFlag = True
+                        elif args[2].lower().strip() == "destroy":
+                            DestroyFlag = True
+                        elif args[2].lower().strip() == "alloc":
+                            AllocFlag = True
+                        elif args[2].lower().strip() == "free":
+                            FreeFlag = True
+                        elif args[2].lower().strip() == "realloc":
+                            ReAllocFlag = True                            
+                        elif args[2].lower().strip() == "setuef":
+                            setuefFlag = True
+                        elif args[2].lower().strip() == "va":
+                            setVAllocFlag = True
+                        elif args[2].lower().strip() == "vf":
+                            setVFreeFlag = True
+                        elif args[2].lower().strip() == "size":
+                            sizeFlag = True
+                        elif args[2].lower().strip() == "createcs":
+                            CreateCSFlag = True
+                        elif args[2].lower().strip() == "deletecs":
+                            DeleteCSFlag = True
+                          
+                        # zmfg you didnt just hook all did you!?
+                        elif args[2].lower().strip() == "all":
                                     AllocFlag = True
                                     FreeFlag = True
                                     CreateFlag = True
@@ -2068,21 +2032,15 @@ def main(args):
                                     sizeFlag = True
                                     CreateCSFlag = True
                                     DeleteCSFlag = True
-                                    setuefFlag = True
-                            else:
-                                window.Log("(-) Please specify a VALID function to hook")
+                                    setuefFlag = True 
+                                    setVAllocFlag = True
+                                    setVFreeFlag = True
+                            
                         else:
-                            return "(-) Invalid argument %s" % args[2]
-                    
-                    elif args[1].lower().strip() == "-h" or args[1].lower().strip() == "-u":
-                        if args[1].lower().strip() == "-u":
-                            Disable = True                           
-                        if args[2].lower().strip() == "create":
-                            CreateFlag = True
-                        elif args[2].lower().strip() == "destroy":
-                            DestroyFlag = True
-                        elif args[2].lower().strip() == "setuef":
-                            setuefFlag = True
+                            window.Log("(-) Please include a valid heap for this hook!")
+                            return "(-) Please include a valid heap for this hook!"
+
+                                                    
                     else:
                         window.Log("%d" % len(args))
                         window.Log("(-) Please specify a function to hook/unhook using -h/-u")
@@ -2092,57 +2050,73 @@ def main(args):
                 window.Log("-" * 30)
                 if AllocFlag:
                     allocaddr = imm.getAddress("ntdll.RtlAllocateHeap" )
-                    retaddr = allocaddr+0x117 # retn 0xc
-                    hook_output = ("(+) %s RtlAllocateHeap() for heap 0x%08x" % 
-                    (hook_on(imm, heap, ALLOCLABEL, RtlAllocateHeapHook, RtlAllocateHeapHook_ret, allocaddr, retaddr, Disable, window), heap))
+                    retaddr = allocaddr+0x117
+                    if FilterHeap:
+                        hook_output = ("(+) %s RtlAllocateHeap() for heap 0x%08x" % 
+                        (hook_on(imm, ALLOCLABEL, allocaddr, "RtlAllocateHeap", retaddr, Disable, window, heap), heap))
+                    else:
+                        hook_output = ("(+) %s RtlAllocateHeap()" %  
+                        (hook_on(imm, ALLOCLABEL, allocaddr, "RtlAllocateHeap", retaddr, Disable, window)))                      
                 if FreeFlag:
                     freeaddr = imm.getAddress("ntdll.RtlFreeHeap" )
-                    retaddr = freeaddr+0x130 # retn 0xc
+                    retaddr = freeaddr+0x130
                     hook_output = ("(+) %s RtlFreeHeap() for heap 0x%08x" % 
-                    (hook_on(imm, heap, FREELABEL, RtlFreeHeapHook, RtlFreeHeapHook_ret, freeaddr, retaddr, Disable, window), heap))
+                    (hook_on(imm, FREELABEL, freeaddr, "RtlFreeHeap", retaddr, Disable, window), heap))
                 if CreateFlag:
-                    createaddr = imm.getAddress("ntdll.RtlCreateHeap" )
-                    retaddr = createaddr+0x42e
-                    hook_output = ("(+) %s RtlCreateHeap() for heap 0x%08x" % 
-                    (hook_on(imm, 0, CREATELABEL, RtlCreateHeap, RtlCreateHeap_ret, createaddr, retaddr, Disable, window), 0))
+                    # we dont hook ntdll.RtlCreateHeap because its not simply a wrapper...
+                    createaddr = imm.getAddress("kernel32.HeapCreate" )
+                    retaddr = createaddr+0x57
+                    hook_output = ("(+) %s HeapCreate() for heap 0x%08x" % 
+                    (hook_on(imm, CREATELABEL, createaddr, "RtlCreateHeap", retaddr, Disable, window), 0))
                 if DestroyFlag:
                     destoryaddr = imm.getAddress("ntdll.RtlDestroyHeap")
                     retaddr = destoryaddr+0xd9
                     hook_output = ("(+) %s RtlDestroyHeap() for heap 0x%08x" % 
-                    (hook_on(imm, 0, DESTROYLABEL, RtlDestroyHeap, RtlDestroyHeap_ret, destoryaddr, retaddr, Disable, window), 0))
+                    (hook_on(imm, DESTROYLABEL, destoryaddr, "RtlDestroyHeap", retaddr, Disable, window), 0))
                 if ReAllocFlag:
                     reallocaddr = imm.getAddress("ntdll.RtlReAllocateHeap")
                     retaddr = reallocaddr+0x20a
                     hook_output = ("(+) %s RtlReAllocateHeap() for heap 0x%08x" % 
-                    (hook_on(imm, 0, REALLOCLABEL, RtlReAllocateHeap, RtlReAllocateHeap_ret, reallocaddr, retaddr, Disable, window), 0))
+                    (hook_on(imm, REALLOCLABEL, reallocaddr, "RtlReAllocateHeap", retaddr, Disable, window), 0))
                 if sizeFlag:
                     sizeaddr = imm.getAddress("ntdll.RtlSizeHeap")
                     retaddr = sizeaddr+0x62
                     hook_output = ("(+) %s RtlSizeHeap() for heap 0x%08x" % 
-                    (hook_on(imm, 0, SIZELABEL, RtlSizeHeap, RtlSizeHeap_ret, sizeaddr, retaddr, Disable, window), 0))
+                    (hook_on(imm, SIZELABEL, sizeaddr, "RtlSizeHeap", retaddr, Disable, window), 0))
                 if CreateCSFlag:
                     create_cs_addr = imm.getAddress("ntdll.RtlInitializeCriticalSection")
                     retaddr = create_cs_addr+0x10
                     hook_output = ("(+) %s RtlInitializeCriticalSection() for heap 0x%08x" % 
-                    (hook_on(imm, 0, CREATECSLABEL, RtlInitializeCriticalSection, RtlInitializeCriticalSection_ret, create_cs_addr, retaddr, Disable, window), 0))
+                    (hook_on(imm, CREATECSLABEL, create_cs_addr, "RtlInitializeCriticalSection", retaddr, Disable, window), 0))
                 if DeleteCSFlag:
                     delete_cs_addr = imm.getAddress("ntdll.RtlDeleteCriticalSection")
                     retaddr = delete_cs_addr+0x78
                     hook_output = ("(+) %s RtlDeleteCriticalSection() for heap 0x%08x" % 
-                    (hook_on(imm, 0, DELETECSLABEL, RtlDeleteCriticalSection, RtlDeleteCriticalSection_ret, delete_cs_addr, retaddr, Disable, window), 0))                    
+                    (hook_on(imm, DELETECSLABEL, delete_cs_addr, "RtlDeleteCriticalSection", retaddr, Disable, window), 0))                    
                 if setuefFlag:
                     setuef_addr = imm.getAddress("kernel32.SetUnhandledExceptionFilter")
                     # no worries if you dont return here, it just wont log the return address
                     retaddr = setuef_addr-0x34707
                     hook_output = ("(+) %s SetUnhandledExceptionFilter() for heap 0x%08x" % 
-                    (hook_on(imm, 0, SETUEFLABEL, SetUnhandledExceptionFilter, SetUnhandledExceptionFilter_ret, setuef_addr, retaddr, Disable, window), 0))                      
-                
+                    (hook_on(imm, SETUEFLABEL, setuef_addr, "SetUnhandledExceptionFilter", retaddr, Disable, window), 0))                      
+                if setVAllocFlag:
+                    setva_addr = imm.getAddress("kernel32.VirtualAllocEx")
+                    # no worries if you dont return here, it just wont log the return address
+                    retaddr = setva_addr+0x47
+                    hook_output = ("(+) %s VirtualAllocEx() for heap 0x%08x" % 
+                    (hook_on(imm, VIRALLOCLABEL, setva_addr, "VirtualAllocEx", retaddr, Disable, window), 0))                      
+                if setVFreeFlag:
+                    setvf_addr = imm.getAddress("kernel32.VirtualFreeEx")
+                    # no worries if you dont return here, it just wont log the return address
+                    retaddr = setvf_addr+0x3d
+                    hook_output = ("(+) %s VirtualFreeEx() for heap 0x%08x" % 
+                    (hook_on(imm, VIRFREELABEL, setvf_addr, "VirtualFreeEx", retaddr, Disable, window), 0))                      
+                                
                 window.Log(hook_output)
                 window.Log("-" * 30)                    
                 return hook_output                    
-                    
-                # TODO: hooking RtlReAllocateHeap, RtlSizeHeap, RtlInitializeCriticalSection, RtlDeleteCriticalSection    
                             
         # more than one command and that we cant understand
+        # =================================================
         else:
             return usage(imm)
