@@ -556,6 +556,8 @@ def freelist0_heuristics(window, chunk_data, pheap, imm, data_structure, vuln_ch
     # real values
     blink = corrupt_chunk_data[4]
     flink = corrupt_chunk_data[5]
+    
+    
     # check for FreeList[0] insert, search, blocksplit
     if data_structure == "freelist" and corrupt_chunk_size == 0:
 
@@ -605,48 +607,44 @@ def freelist0_heuristics(window, chunk_data, pheap, imm, data_structure, vuln_ch
                         window.Log("    - Flink was detected to be overwritten (0x%08x), try setting it to a fake chunk structure" % corrupt_chunk_flink)
                     else:
                         window.Log("    - Try to overwrite the flink for this chunk so you can point it to a fake chunk or try another attack")
-                    
-                    # HeapCache attack validation goes here:
-                    # check which bucket has the overwritten chunk..
-                    # walk the bitmap and work out which size doesnt match. 
-                    # that will be the size to allocate() next? best approach? moar thinking
-                    # use HeapCache.c to determine this...
-                    if pheap.HeapCache:
-                        window.Log("(+) Performing HeapCache analysis...")
-                        
-                    else:
-                        window.Log("(!) The HeapCache is inactive for this FreeList[0].")
                     # information for the user..
                     vuln_chunks += 1
-    if vuln_chunks >= 1:
-        window.Log("")
-        window.Log("1. Freelist[0] insert attack:")
-        window.Log("-" * 29)
-        window.Log("The idea here is overwrite a chunks blink and set it to a lookaside[n] entry or function pointer table")
-        window.Log("1. Overwriten chunk's blink will be set to the Lookaside[n] list entry")
-        window.Log("2. Free chunk is inserted BEFORE the overwritten chunk write the address of the free chunk into blinks address (blink->inserted_chunk)")            
-        window.Log("3. Now lookaside[n]->inserted_chunk->overwritten_chunk->controlled_flink")
-        window.Log("4. Now pop 3 chunks off the lookaside[n] to get the controlled flink returned from RtlAllocateHeap")
-        window.Log("5. Overwrite a function pointer")
-        window.Log("")
-        window.Log("2. Freelist[0] search attack:")
-        window.Log("-" * 29)
-        window.Log("The idea here is overwrite a chunks flink and set it to a fake chunk.")
-        window.Log("1. Set the flink to an address at the base of the heap (eg: heapbase+0x188)")
-        window.Log("2. When a size that is bigger than the overwritten chunk is requested, it will return the fake chunk address-0x8 (heapbase+0x180)")                   
-        window.Log("- You can set it to FreeList[0x41] or FreeList[0x42] and overwrite the RtlCommitRoutine pointer at offset heapbase+0x578")
-        window.Log("- Or you could overwrite the blink/flink of a FreeList[n] entry itself..?")
-        window.Log("")
-        window.Log("3. Freelist[0] relinking attack:")
-        window.Log("-" * 32)
-        window.Log("The idea here is to control flink, so that you can indirectly control address that WILL point to the blink of the fake chunk")
-        window.Log("1. The chunk gets split and the relink chunk is inserted BEFORE the fake chunk")
-        window.Log("2. The address of the relink chunk is written to the fake chunks blink")
-        window.Log("3. The idea is to overwrite the pointer to the Lookaside (heapbase+0x580) with a pointer to the fake chunk")
-        window.Log(" - set the flink to be heapbase+0x57c")
-        window.Log(" - set the fake chunk to be heapbase+0x574")
-        window.Log(" - flink of fake chunk will be at heapbase+0x57c")
-        window.Log(" - blink of fake chunk will be heapbase+0x580, thus overwriting heapbase+0x688 with the relink chunk address")
+                    
+                # Validate the HeapCache
+                # ====================== 
+                if pheap.HeapCache:
+                    bit_list, chunk_dict = get_heapCache_bitmap(pheap, True)                   
+                    if chunk.size in range (0x80, 0x400):
+                        if bit_list[chunk.size] != 1:
+                            window.Log("(+) Detected corrupted chunk in HeapCache bitmap[0x%04x] chunk address 0x%08x" % (chunk_dict[corrupt_chunk_address-0x8],corrupt_chunk_address-0x8),corrupt_chunk_address-0x8)
+                            # last chunk so we can get the size by 
+                            if flink == 1:
+                                window.Log("(+) This is the last chunk in FreeList[0]")
+                            if chunk.size > chunk_dict[corrupt_chunk_address-0x8]:
+                                window.Log("(!) Size has been overwritten with a larger value! %d (0x%04x) try to overwrite the chunk with a size < %d (0x%04x)" % (chunk.size, chunk.size, chunk_dict[corrupt_chunk_address-0x8],chunk_dict[corrupt_chunk_address-0x8]))
+                            elif chunk.size < chunk_dict[corrupt_chunk_address-0x8]:
+                                window.Log("(!) Excellant! Size has been overwritten with a smaller value!  ")                       
+                            # if the bitmask before our corrupted size is set, were fucked.
+                            if bit_list[chunk_dict[corrupt_chunk_address-0x8]-0x1] == 1:
+                                window.Log("(-) HeapCache de-synchronization size attack will not work because there are no avalaible ")
+                                window.Log("    chunk sizes between the last set bucket entry and this chunks bucket entry!")
+                                window.Log("")
+                                window.Log("    -> bitmap[0x%04x] MUST be 0" % (chunk_dict[corrupt_chunk_address-0x8]-0x1))
+                            else:
+                                window.Log("(!) HeapCache de-synchronization size attack: allocate a chunk of size %d (0x%02x)" % ((chunk.size-0x1 * 0x8), chunk.size))
+                                
+                                for size in range (0x80, chunk_dict[corrupt_chunk_address-0x8]):
+                                    if bit_list[size] == 1:
+                                        break
+                                if size+0x1 < chunk_dict[corrupt_chunk_address-0x8]:
+                                    window.Log("(+) -> avaliable sizes to overwrite with:")
+                                    for ow_size in range(size+0x1, chunk_dict[corrupt_chunk_address-0x8]):
+                                        window.Log("    HEAP_CACHE[0x%04x]" % ow_size)                               
+                            
+                            vuln_chunks += 1
+                else:
+                    window.Log("(!) The HeapCache is inactive for this FreeList[0].")
+
     # remove the obj for next run
     imm.forgetKnowledge(chunk_data)
     return vuln_chunks
@@ -959,6 +957,24 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
     if no_chunks == 128:  
         window.Log("(-) Lookaside not in use..")
 
+
+# I do not use the offset to the bitmap because
+# I dont need to over complicate this..
+def get_heapCache_bitmap(pheap, get_chunk_dict=False):
+    bit_list = {}
+    chunk_dict = {}
+    for a in range(0, len(pheap.HeapCache.Buckets)):
+        if pheap.HeapCache.Buckets[a]:
+            bit_list[a+0x80] = 1
+            if get_chunk_dict:
+                chunk_dict[pheap.HeapCache.Buckets[a]] = a+0x80 # ;)
+        else:
+            bit_list[a+0x80] = 0
+    if get_chunk_dict:
+        return bit_list, chunk_dict
+    else:
+        return bit_list
+
 # get the bits for each freelist[n] entry
 def get_FreeListInUse(pHeap):
     # ensure we are dealing with 32 bit integers only, lose the LSB
@@ -1018,18 +1034,10 @@ def set_FreeListInUse(value,win,pHeap,imm,heapbase):
     
     
 def dump_HeapCache_bitmap(pheap, window):
-    ret = []
-    bitblocks = ""
-    HeapCache_index = 0x80
-    for a in range(0, pheap.HeapCache.NumBuckets/32/4):
-        ret.append(pheap.decimal2binary(pheap.HeapCache.Bitmask[a]))
-        if a%2:
-            bitblocks += "%s" % str("".join(ret) )
-            ret = []
-    for bit in bitblocks:
-        window.Log("bucket[0x%03x] = %d" % (HeapCache_index,int(bit)))
-        HeapCache_index += 0x1
-
+    bit_list = get_heapCache_bitmap(pheap)
+    
+    for k,v in bit_list.items():
+        window.Log("bucket[0x%03x] = %d" % (k,v))
 
 def dump_HeapCache_struc(pheap, window):
     window.Log("-" * 45)
@@ -1405,68 +1413,37 @@ def dump_segment_structure(pheap, window, imm, heap):
         window.Log("-" * 19)
         window.Log("")
         entry_0 = imm.readMemory(segment.BaseAddress, 4)
-        entry_0 = reverse(entry_0)
-        entry_0 = int(binascii.hexlify(entry_0),16)
+        entry_0 = struct.unpack("L", entry_0)[0]
         entry_1 = imm.readMemory(segment.BaseAddress+0x4, 4)
-        entry_1 = reverse(entry_1)
-        entry_1 = int(binascii.hexlify(entry_1),16)                   
+        entry_1 = struct.unpack("L", entry_1)[0]
         signature = imm.readMemory(segment.BaseAddress+0x8, 4)
-        signature = reverse(signature)
-        signature = int(binascii.hexlify(signature),16)  
+        signature = struct.unpack("L", signature)[0]
         flags = imm.readMemory(segment.BaseAddress+0xc, 4)
-        flags = reverse(flags)
-        flags = int(binascii.hexlify(flags),16)  
+        flags = struct.unpack("L", flags)[0]
         heap_ = imm.readMemory(segment.BaseAddress+0x10, 4)
-        heap_ = reverse(heap_)
-        heap_ = int(binascii.hexlify(heap_),16)      
-                                    
+        heap_ = struct.unpack("L", heap_)[0]
         LargestUncommitedRange = imm.readMemory(segment.BaseAddress+0x14, 4)
         LargestUncommitedRange = struct.unpack("L", LargestUncommitedRange)[0]
-        #LargestUncommitedRange = reverse(LargestUncommitedRange)
-        #LargestUncommitedRange = int(binascii.hexlify(LargestUncommitedRange),16)
-                    
         BaseAddress = imm.readMemory(segment.BaseAddress+0x18, 4)
-        BaseAddress = struct.unpack("L", BaseAddress)[0]
-        #BaseAddress = reverse(BaseAddress)
-        #BaseAddress = int(binascii.hexlify(BaseAddress),16) 
-                    
+        BaseAddress = struct.unpack("L", BaseAddress)[0] 
         NumberOfPages = imm.readMemory(segment.BaseAddress+0x1c, 4)
         NumberOfPages = struct.unpack("L", NumberOfPages)[0]
-        #NumberOfPages = reverse(NumberOfPages)
-        #NumberOfPages = int(binascii.hexlify(NumberOfPages),16) 
-                    
         FirstEntry = imm.readMemory(segment.BaseAddress+0x20, 4)
-        FirstEntry = reverse(FirstEntry)
-        FirstEntry = int(binascii.hexlify(FirstEntry),16) 
-                    
+        FirstEntry = struct.unpack("L", FirstEntry)[0]
         LastValidEntry = imm.readMemory(segment.BaseAddress+0x24, 4)
-        LastValidEntry = reverse(LastValidEntry)
-        LastValidEntry = int(binascii.hexlify(LastValidEntry),16) 
-
+        LastValidEntry = struct.unpack("L", LastValidEntry)[0]
         NumberOfUncommitedPages = imm.readMemory(segment.BaseAddress+0x28, 4)
-        NumberOfUncommitedPages = reverse(NumberOfUncommitedPages)
-        NumberOfUncommitedPages = int(binascii.hexlify(NumberOfUncommitedPages),16)                    
-
+        NumberOfUncommitedPages = struct.unpack("L", NumberOfUncommitedPages)[0]
         NumberOfUncommitedRanges = imm.readMemory(segment.BaseAddress+0x2c, 4)
-        NumberOfUncommitedRanges = reverse(NumberOfUncommitedRanges)
-        NumberOfUncommitedRanges = int(binascii.hexlify(NumberOfUncommitedRanges),16)  
-                    
+        NumberOfUncommitedRanges = struct.unpack("L", NumberOfUncommitedRanges)[0]
         UnCommitedRanges = imm.readMemory(segment.BaseAddress+0x30, 4)
-        UnCommitedRanges = reverse(UnCommitedRanges)
-        UnCommitedRanges = int(binascii.hexlify(UnCommitedRanges),16) 
-                    
+        UnCommitedRanges = struct.unpack("L", UnCommitedRanges)[0]
         AllocatorBackTraceIndex = imm.readMemory(segment.BaseAddress+0x34, 2)
-        AllocatorBackTraceIndex = reverse(AllocatorBackTraceIndex)
-        AllocatorBackTraceIndex = int(binascii.hexlify(AllocatorBackTraceIndex),16)                     
-
+        AllocatorBackTraceIndex = struct.unpack("H", AllocatorBackTraceIndex)[0]
         Reserved = imm.readMemory(segment.BaseAddress+0x36, 2)
-        Reserved = reverse(Reserved)
-        Reserved = int(binascii.hexlify(Reserved),16) 
-
+        Reserved = struct.unpack("H", Reserved)[0]
         LastEntryInSegment = imm.readMemory(segment.BaseAddress+0x38, 4)
-        LastEntryInSegment = reverse(LastEntryInSegment)
-        LastEntryInSegment = int(binascii.hexlify(LastEntryInSegment),16) 
-                                                                                                                     
+        LastEntryInSegment = struct.unpack("L", LastEntryInSegment)[0]                                      
         window.Log("+0x000 Entry  (high)            : 0x%08x" % entry_0,entry_0)
         window.Log("+0x000 Entry  (low)             : 0x%08x" % entry_1,entry_1)
         window.Log("+0x008 Signature                : 0x%08x" % signature,signature)
@@ -1544,16 +1521,11 @@ def analyse_heap(heap, imm, window):
             window.Log("       Segment %d                      : 0x%08x" % (i,segment.BaseAddress), segment.BaseAddress)
 
         FreelistBitmap = imm.readMemory(heap+0x158, 4)
-        FreelistBitmap = reverse(FreelistBitmap)
-        FreelistBitmap = int(binascii.hexlify(FreelistBitmap),16)  
-                        
+        FreelistBitmap = struct.unpack("L", FreelistBitmap)[0]
         window.Log("+0x158 FreelistBitmap                 : 0x%08x" % FreelistBitmap, FreelistBitmap)
         window.Log("+0x16a AllocatorBackTraceIndex        : 0x%08x" % pheap.AllocatorBackTraceIndex, pheap.AllocatorBackTraceIndex)
-
         NonDedicatedListLength = imm.readMemory(heap+0x16c, 4)
-        NonDedicatedListLength = reverse(NonDedicatedListLength)
-        NonDedicatedListLength = int(binascii.hexlify(NonDedicatedListLength),16)
-                    
+        NonDedicatedListLength = struct.unpack("L", NonDedicatedListLength)[0]
         window.Log("+0x16c NonDedicatedListLength         : 0x%08x" % NonDedicatedListLength, NonDedicatedListLength)
         window.Log("+0x170 LargeBlocksIndex               : 0x%08x" % pheap.LargeBlocksIndex, pheap.LargeBlocksIndex)
         window.Log("+0x174 PseudoTagEntries               : 0x%08x" % pheap.PseudoTagEntries)
@@ -1562,12 +1534,13 @@ def analyse_heap(heap, imm, window):
         window.Log("+0x57c CommitRoutine                  : 0x%08x" % pheap.CommitRoutine, pheap.CommitRoutine)
                     
         FrontEndHeap = imm.readMemory(heap+0x580, 4)
-        FrontEndHeap = reverse(FrontEndHeap)
-        FrontEndHeap = int(binascii.hexlify(FrontEndHeap),16)
+        FrontEndHeap = struct.unpack("L", FrontEndHeap)[0]
+        
+        #FrontEndHeap = reverse(FrontEndHeap)
+        #FrontEndHeap = int(binascii.hexlify(FrontEndHeap),16)
                     
         FrontHeapLockCount = imm.readMemory(heap+0x584, 2)
-        FrontHeapLockCount = reverse(FrontHeapLockCount)
-        FrontHeapLockCount = int(binascii.hexlify(FrontHeapLockCount),16)
+        FrontHeapLockCount = struct.unpack("H", FrontHeapLockCount)[0]
                     
         FrontEndHeapType = imm.readMemory(heap+0x586, 1)
         FrontEndHeapType = reverse(FrontEndHeapType)
@@ -1726,7 +1699,7 @@ def main(args):
                     if pheap.HeapCache:
                         window.Log("-" * 62)
                         window.Log("FreeList structure @ 0x%08x (HeapCache active)" % (heap+0x178))
-                        window.Log("- use '!heaper dc 0x%08x' to dump the HeapCache separately" % (heap+0x178))
+                        window.Log("- use '!heaper ahc 0x%08x' to dump the HeapCache separately" % (heap+0x178))
                         window.Log("-" * 62)
                     else:
                         window.Log("-" * 50)
@@ -1754,6 +1727,38 @@ def main(args):
                             vuln_chunks += freelist0_heuristics(window, knowledge, pheap, imm, "freelist", vuln_chunks)
                     window.Log("")
                     if vuln_chunks > 0:
+                        window.Log("")
+                        window.Log("Information regarding FreeList[0] attacks")
+                        window.Log("=" * 41)
+                        window.Log("")                      
+                        window.Log("1. Freelist[0] insert attack:")
+                        window.Log("-" * 29)
+                        window.Log("The idea here is overwrite a chunks blink and set it to a lookaside[n] entry or function pointer table")
+                        window.Log("1. Overwriten chunk's blink will be set to the Lookaside[n] list entry")
+                        window.Log("2. Free chunk is inserted BEFORE the overwritten chunk write the address of the free chunk into blinks address (blink->inserted_chunk)")            
+                        window.Log("3. Now lookaside[n]->inserted_chunk->overwritten_chunk->controlled_flink")
+                        window.Log("4. Now pop 3 chunks off the lookaside[n] to get the controlled flink returned from RtlAllocateHeap")
+                        window.Log("5. Overwrite a function pointer")
+                        window.Log("")
+                        window.Log("2. Freelist[0] search attack:")
+                        window.Log("-" * 29)
+                        window.Log("The idea here is overwrite a chunks flink and set it to a fake chunk.")
+                        window.Log("1. Set the flink to an address at the base of the heap (eg: heapbase+0x188)")
+                        window.Log("2. When a size that is bigger than the overwritten chunk is requested, it will return the fake chunk address-0x8 (heapbase+0x180)")                   
+                        window.Log("- You can set it to FreeList[0x41] or FreeList[0x42] and overwrite the RtlCommitRoutine pointer at offset heapbase+0x578")
+                        window.Log("- Or you could overwrite the blink/flink of a FreeList[n] entry itself..?")
+                        window.Log("")
+                        window.Log("3. Freelist[0] relinking attack:")
+                        window.Log("-" * 32)
+                        window.Log("The idea here is to control flink, so that you can indirectly control address that WILL point to the blink of the fake chunk")
+                        window.Log("1. The chunk gets split and the relink chunk is inserted BEFORE the fake chunk")
+                        window.Log("2. The address of the relink chunk is written to the fake chunks blink")
+                        window.Log("3. The idea is to overwrite the pointer to the Lookaside (heapbase+0x580) with a pointer to the fake chunk")
+                        window.Log(" - set the flink to be heapbase+0x57c")
+                        window.Log(" - set the fake chunk to be heapbase+0x574")
+                        window.Log(" - flink of fake chunk will be at heapbase+0x57c")
+                        window.Log(" - blink of fake chunk will be heapbase+0x580, thus overwriting heapbase+0x688 with the relink chunk address")                        
+                        window.Log("")
                         window.Log("(!) Heuristics check completed")
                     elif vuln_chunks <= 0:
                         window.Log("(!) No vulnerable checks were identified") 
