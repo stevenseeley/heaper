@@ -41,16 +41,32 @@ import pydot
 import struct
 import re
 
-##################################################################################
-# GLOBALS VARS                                                                   #
-##################################################################################
+
+# GLOBAL VARIABLES
+# ================
+
+# all available functions
+# ========================
 available_commands = ["dumppeb", "dp", "dumpheaps", "dh", "analyseheap", "ah", "dumpteb", "dt", 
                       "analyselal", "al", "analysefreelist", "af", "analysechunks", "ac", 
                       "dumpfunctionpointers", "dfp", "help", "-h", "analysesegments", "as", "-f", 
-                      "-m", "-p", "freelistinuse", "fliu", "hook", "analyseheapcache", "ahc", "h"]
-block = 8 # a block will always be 8 bytes
+                      "-m", "-p", "freelistinuse", "fliu", "hook", "analyseheapcache", "ahc", "h",
+                      "exploit","exp"]
+
+# 8 byte block
+# ============
+block = 8
+
+# window management
+# =================
 opennewwindow = False
+
+# graphic flag
+# ============
 graphic_structure = False
+
+# hook tags
+# =========
 tag = "display_box"
 ALLOCLABEL = "RtlAllocateHeap Hook"
 FREELABEL = "RtlFreeHeap Hook"
@@ -64,9 +80,29 @@ SETUEFLABEL = "SetUnhandledExceptionFilter Hook"
 VIRALLOCLABEL = "VirtualAlloc Hook"
 VIRFREELABEL = "VirtualFree Hook"
 
+# hook flags
+# ==========
+FilterHeap = False
+Disable = False
+AllocFlag = False
+FreeFlag = False
+CreateFlag = False
+DestroyFlag = False
+ReAllocFlag = False
+sizeFlag = False
+CreateCSFlag = False
+DeleteCSFlag = False
+setuefFlag = False
+setVAllocFlag = False
+setVFreeFlag = False
+
 # valid functions too hook
+# ========================
 valid_functions = ["alloc", "free", "create", "destroy", "realloc", "size", "createcs", "deletecs",
                    "all", "setuef", "va", "vf"]
+
+# return heap for hooking
+# =======================
 rheap = False
 ##################################################################################
 
@@ -440,6 +476,8 @@ def usage(imm):
     imm.log("analyseheapcache <heap> / ahc <heap>  : analyse a particular heap's cache (FreeList[0])")
     imm.log("freelistinuse <heap> / fliu <heap>    : analyse/patch the FreeListInUse structure")
     imm.log("hook <heap> / h -h <func>             : Hook various functions that create/destroy/manipulate a heap")
+    imm.log("exploit <heap> / exp <heap>           : Perform heuristics against the FrontEnd and BackEnd allocators")
+    imm.log("                                        to determine exploitable conditions")
     imm.log("")
     imm.log("Want more info about a given command? Run !heaper help <command>",highlight=1)
     imm.log("")
@@ -508,11 +546,19 @@ def get_extended_usage():
     extusage["analysechunks"] += "Use -r <start address> <end address> to view all the chunks between those ranges\n"
     extusage["analysechunks"] += "Use -f to chunk_filter chunks by type (free/busy) eg: !heaper ac d20000 -f busy\n"
     extusage["analysechunks"] += "Use -v to view the first 16 bytes of each chunk\n"
-    extusage["dumpfunctionpointers"] = "\ndumpfunctionpointers /  dfp : Dump all the function pointers of the current process\n"
+    extusage["dumpfunctionpointers"] = "\ndumpfunctionpointers / dfp : Dump all the function pointers of the current process\n"
     extusage["dumpfunctionpointers"] += "-----------------------------------------------------------------------------------\n"
     extusage["dumpfunctionpointers"] += "Use -p <addr/all> to patch a function pointer or all function pointers in the .data segment\n"
     extusage["dumpfunctionpointers"] += "Use -r <addr/all> to restore a function pointer or all function pointers in the .data segment\n"
     extusage["dumpfunctionpointers"] += "eg: !heaper dfp -r 005000f0\n"
+    extusage["exploit"] = "\nexploit / exp : Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions\n"
+    extusage["exploit"] += "-----------------------------------------------------------------------------------\n"
+    extusage["exploit"] += "Use -f to analyse the FrontEnd allocator\n"
+    extusage["exploit"] += "Use -b to analyse the BackEnd allocator\n"
+    extusage["exploit"] += "eg: !heaper exploit 00490000 -f\n"
+        
+    
+    
     return extusage
     
 def set_up_usage():
@@ -541,6 +587,8 @@ def set_up_usage():
     cmds["fliu"] = set_command("freelistinuse", "analyse/patch the FreeListInUse structure",get_extended_usage()["freelistinuse"], "fliu")
     cmds["hook"] = set_command("hook", "Hook various functions that create/destroy/manipulate a heap",get_extended_usage()["hook"], "h")
     cmds["h"] = set_command("hook", "Hook various functions that create/destroy/manipulate a heap",get_extended_usage()["hook"], "h")
+    cmds["exploit"] = set_command("exploit", "Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions",get_extended_usage()["exploit"], "exp")
+    cmds["exp"] = set_command("exploit", "Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions",get_extended_usage()["exploit"], "exp")    
     return cmds
 
 # TODO: build heuristics to detect exploitable paths...
@@ -574,7 +622,8 @@ def freelist0_heuristics(window, chunk_data, pheap, imm, data_structure, vuln_ch
                     and pheap.chunks[index-1].size != chunk.psize)):
                     
                     window.Log("")
-                    window.Log("(+) Detected corrupted chunk in FreeList[0x%02x] chunk address 0x%08x" % (corrupt_chunk_size,corrupt_chunk_address))
+                    window.Log("(+) Detected corrupted chunk in FreeList[0x%02x] chunk address 0x%08x" % (corrupt_chunk_size,corrupt_chunk_address-0x8))
+                    window.Log("")
                     if flink == 1:
                         window.Log(" -> This chunk is the last entry in FreeList[0]")
                     elif flink != 1:
@@ -617,31 +666,51 @@ def freelist0_heuristics(window, chunk_data, pheap, imm, data_structure, vuln_ch
                     if chunk.size in range (0x80, 0x400):
                         if bit_list[chunk.size] != 1:
                             window.Log("(+) Detected corrupted chunk in HeapCache bitmap[0x%04x] chunk address 0x%08x" % (chunk_dict[corrupt_chunk_address-0x8],corrupt_chunk_address-0x8),corrupt_chunk_address-0x8)
+                            window.Log("")
                             # last chunk so we can get the size by 
                             if flink == 1:
-                                window.Log("(+) This is the last chunk in FreeList[0]")
+                                window.Log(" -> This chunk is the last entry in FreeList[0]")
+                            elif flink != 1:
+                                window.Log(" -> This chunk is number %d in FreeList[0]" % index)
+                            window.Log("")
+                            window.Log(" > HeapCache de-synchronization attack:") 
                             if chunk.size > chunk_dict[corrupt_chunk_address-0x8]:
-                                window.Log("(!) Size has been overwritten with a larger value! %d (0x%04x) try to overwrite the chunk with a size < %d (0x%04x)" % (chunk.size, chunk.size, chunk_dict[corrupt_chunk_address-0x8],chunk_dict[corrupt_chunk_address-0x8]))
+                                window.Log("    - Size has been overwritten with a larger value! %d (0x%04x) try to overwrite the chunk with a size < %d (0x%04x)" % (chunk.size, chunk.size, chunk_dict[corrupt_chunk_address-0x8],chunk_dict[corrupt_chunk_address-0x8]))
                             elif chunk.size < chunk_dict[corrupt_chunk_address-0x8]:
-                                window.Log("(!) Excellant! Size has been overwritten with a smaller value!  ")                       
+                                window.Log("    - Excellant! Size has been overwritten with a smaller value!  ")                       
                             # if the bitmask before our corrupted size is set, were fucked.
                             if bit_list[chunk_dict[corrupt_chunk_address-0x8]-0x1] == 1:
                                 window.Log("(-) HeapCache de-synchronization size attack will not work because there are no avalaible ")
                                 window.Log("    chunk sizes between the last set bucket entry and this chunks bucket entry!")
                                 window.Log("")
                                 window.Log("    -> bitmap[0x%04x] MUST be 0" % (chunk_dict[corrupt_chunk_address-0x8]-0x1))
+                            
+                            # else, we have a chance to exploit it...
                             else:
-                                window.Log("(!) HeapCache de-synchronization size attack: allocate a chunk of size %d (0x%02x)" % ((chunk.size-0x1 * 0x8), chunk.size))
+                                window.Log("    - Allocate a chunk of size %d (0x%02x) or overwrite another size" % ((chunk.size-0x1 * 0x8), chunk.size))
                                 
-                                for size in range (0x80, chunk_dict[corrupt_chunk_address-0x8]):
+                                for size in range (chunk_dict[corrupt_chunk_address-0x8]-0x1, 0x7f, -1):
                                     if bit_list[size] == 1:
                                         break
                                 if size+0x1 < chunk_dict[corrupt_chunk_address-0x8]:
-                                    window.Log("(+) -> avaliable sizes to overwrite with:")
+                                    window.Log("    -> Available chunk sizes to overwrite with:")
+                                    window.Log("")
                                     for ow_size in range(size+0x1, chunk_dict[corrupt_chunk_address-0x8]):
-                                        window.Log("    HEAP_CACHE[0x%04x]" % ow_size)                               
+                                        window.Log("        HEAP_CACHE[0x%04x]" % ow_size)                               
                             
                             vuln_chunks += 1
+                    # else its overwritten with a value outside of FreeList[0] possible values
+                    elif chunk.size not in range (0x80, 0x400):
+                        window.Log("")
+                        window.Log("(+) Detected corrupted chunk in HeapCache bitmap[0x%04x] chunk address 0x%08x" % (chunk_dict[corrupt_chunk_address-0x8],corrupt_chunk_address-0x8),corrupt_chunk_address-0x8)
+                        window.Log("")
+                        if flink == 1:
+                            window.Log(" -> This chunk is the last entry in FreeList[0]")
+                        elif flink != 1:
+                            window.Log(" -> This chunk is number %d in FreeList[0]" % index)                 
+                        window.Log("")
+                        window.Log("(!) This chunk was overwritten with a size value (0x%04x) that is outside of the range of FreeList[0]" % chunk.size)
+                
                 else:
                     window.Log("(!) The HeapCache is inactive for this FreeList[0].")
 
@@ -656,49 +725,44 @@ def dump_heap(imm):
         imm.log("Heap: 0x%08x" % hndx, address = hndx, focus = 1)
     return "Heap command successful"      
         
+        
 def dump_peb(imm, window, dump_management=False):
+    """
+    dump the PEB structure using mostly immunities API
+    
+    arguments:
+    - obj imm
+    - obj window
+    - boolean dump_management flag
+    
+    return:
+    - PEB structure if flag is set
+    - The PEB address if flag is NOT set
+    """
     peb = imm.getPEBAddress()
     window.Log("")
     
     if dump_management:
         
-        # dont know why, but some of this isnt in the api?
+        # some PEB members are not in immlib API
         AtlThunkSListPtr32 = imm.readMemory(peb+0x34, 4)
-        AtlThunkSListPtr32 = reverse(AtlThunkSListPtr32)
-        AtlThunkSListPtr32 = int(binascii.hexlify(AtlThunkSListPtr32),16)   
-          
+        (AtlThunkSListPtr32) = struct.unpack("L", AtlThunkSListPtr32)  
         AppCompatFlags = imm.readMemory(peb+0x1d8, 8)
-        AppCompatFlags = reverse(AppCompatFlags)
-        AppCompatFlags = int(binascii.hexlify(AppCompatFlags),16)  
-    
+        (AppCompatFlags) = struct.unpack("LL", AppCompatFlags) 
         AppCompatFlagsUser = imm.readMemory(peb+0x1e0, 8)
-        AppCompatFlagsUser = reverse(AppCompatFlagsUser)
-        AppCompatFlagsUser = int(binascii.hexlify(AppCompatFlagsUser),16) 
-        
+        (AppCompatFlagsUser) = struct.unpack("LL", AppCompatFlagsUser) 
         pShimData = imm.readMemory(peb+0x1e8, 4)
-        pShimData = reverse(pShimData)
-        pShimData = int(binascii.hexlify(pShimData),16) 
-        
+        (pShimData) = struct.unpack("L", pShimData)
         ActivationContextData = imm.readMemory(peb+0x1f8, 4)
-        ActivationContextData = reverse(ActivationContextData)
-        ActivationContextData = int(binascii.hexlify(ActivationContextData),16) 
-        
+        (ActivationContextData) = struct.unpack("L", ActivationContextData)
         ProcessAssemblyStorageMap = imm.readMemory(peb+0x1fc, 4)
-        ProcessAssemblyStorageMap = reverse(ProcessAssemblyStorageMap)
-        ProcessAssemblyStorageMap = int(binascii.hexlify(ProcessAssemblyStorageMap),16) 
-        
+        (ProcessAssemblyStorageMap) = struct.unpack("L", ProcessAssemblyStorageMap)
         SystemDefaultActivationContextData = imm.readMemory(peb+0x200, 4)
-        SystemDefaultActivationContextData = reverse(SystemDefaultActivationContextData)
-        SystemDefaultActivationContextData = int(binascii.hexlify(SystemDefaultActivationContextData),16)
-    
+        (SystemDefaultActivationContextData) = struct.unpack("L", SystemDefaultActivationContextData)
         SystemAssemblyStorageMap = imm.readMemory(peb+0x204, 4)
-        SystemAssemblyStorageMap = reverse(SystemAssemblyStorageMap)
-        SystemAssemblyStorageMap = int(binascii.hexlify(SystemAssemblyStorageMap),16)
-        
+        (SystemAssemblyStorageMap) = struct.unpack("L", SystemAssemblyStorageMap)
         MinimumStackCommit = imm.readMemory(peb+0x208, 4)
-        MinimumStackCommit = reverse(MinimumStackCommit)
-        MinimumStackCommit = int(binascii.hexlify(MinimumStackCommit),16)
-           
+        (MinimumStackCommit) = struct.unpack("L", MinimumStackCommit) 
         peb_struct = imm.getPEB()
         window.Log("---------------------------------------------------------")
         window.Log("PEB Management Structure @ 0x%08x" % peb,peb)
@@ -781,6 +845,17 @@ def dump_peb(imm, window, dump_management=False):
         return "PEB is located at 0x%08x" % peb
 
 def dump_teb(imm, window):
+    """
+    dump Thread environment block - dumps the listed TEB's in the current process 
+    (multi-threaded application)
+    
+    arguments:
+    - obj imm
+    - obj window
+    
+    return:
+    - printed TEB addresses
+    """
     currenttid = imm.getThreadId()
     threads = imm.getAllThreads()
     window.Log("")
@@ -805,8 +880,20 @@ def dump_teb(imm, window):
         window.Log("id: %s is located at: 0x%08x" % (tebArray[key],key), key)
     return "Dumped TEB successfully"
     
-# ripped from immunity inc, greetz
 def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
+    """
+    Dump the lookaside list structure
+    
+    arguments:
+    - obj imm
+    - obj pheap
+    - boolean graphic_structure (no need?)
+    - obj window
+    - string graph filename
+    
+    return:
+    - dumps the lookaside list entry
+    """
     exploitable_conditions = ["flink_overwrite", "size_overwrite"]
     if graphic_structure:
         lalgraph = pydot.Dot(graph_type='digraph')
@@ -838,8 +925,7 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                     chunk_read_self_size = ""
                     try:
                         chunk_read_self_size = imm.readMemory(a, 0x2)
-                        chunk_read_self_size = reverse(chunk_read_self_size)
-                        chunk_read_self_size = int(binascii.hexlify(chunk_read_self_size),16)
+                        chunk_read_self_size = struct.unpack("H", chunk_read_self_size)
                         chunk_read_self_size = chunk_read_self_size*8
                     except:
                         pass
@@ -848,8 +934,7 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                     chunkCookie = ""
                     try:
                         chunkCookie = imm.readMemory(a+0x4, 0x1)
-                        chunkCookie = reverse(chunkCookie)
-                        chunkCookie = int(binascii.hexlify(chunkCookie),16)
+                        (chunkCookie) = struct.unpack("B", chunkCookie)
                     except:
                         pass
                     
@@ -857,17 +942,18 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                     chunk_overwrite = False
                     try:
                         flink = imm.readMemory(a+0x8, 0x4)
-                        flink = reverse(flink)
-                        flink = int(binascii.hexlify(flink),16)
+                        (flink) = struct.unpack("L", flink)
                     except:
                         chunk_overwrite = True
                     if not chunk_overwrite:
-                        chunk_data = ("chunk (%d) 0x%08x \nFlink 0x%08x-0x08" % (b, a, (flink)))
+                        chunk_data = ("chunk (%d) 0x%08x \nFlink 0x%08x-0x08" % (b, a, (flink[0])))
                     elif chunk_overwrite:
                         chunk_data = ("chunk (%d) 0x%08x \nFlink ??0x%08x??" % (b, a, (a + 0x8)))
 
                     # else the expected chunk size is not the same as the read in chunk..
-                    if chunk_read_self_size != (ndx * block):
+                    if (chunk_read_self_size[0] * block) != (ndx * block):
+                        window.Log("readinsize: 0x%04x" % chunk_read_self_size[0])
+                        window.Log("calc: 0x%04x" % (ndx * block))
                         # if the size has been overwritten.....
                         if chunk_read_self_size != "":
                             if graphic_structure:
@@ -875,7 +961,7 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                                 (a), style="filled", shape="rectangle", label=chunk_data+"\nSize overwritten..", fillcolor="red"))
                             if not chunk_overwrite:
                                 window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x, Size: %d (0x%03x)" % 
-                                (b, a, (flink), chunk_read_self_size, chunk_read_self_size), address = a) 
+                                (b, a, flink, chunk_read_self_size[0], chunk_read_self_size[0]), address = a) 
                                 window.Log("        -> chunk size should have been %d (0x%04x)! We have a possible chunk overwrite.." % 
                                 (ndx * block, ndx * block), focus=1)
                             elif chunk_overwrite:
@@ -894,13 +980,13 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                                 window.Log("        -> failed to read chunk @ 0x%08x!" % a, address = a)
                                 if graphic_structure:
                                     chunk_nodes.append(pydot.Node("chunk_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nFlink overwrite...", fillcolor="red"))
-                    elif chunk_read_self_size == (ndx * block):
+                    elif (chunk_read_self_size[0] * block) == (ndx * block):
                         b += 1
                         if graphic_structure:
                             chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#3366ff"))
                         if not chunk_overwrite:
                             window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x-0x8, Size: %d (0x%03x), Cookie: 0x%01x" % 
-                                       (b, a, (flink), (ndx * block), (ndx * block), chunkCookie), address = a) 
+                                       (b, a, (flink[0]), (ndx * block), (ndx * block), chunkCookie[0]), address = a) 
                         elif chunk_overwrite:
                             window.Log("    chunk [%d]: 0x%08x, Flink: ??0x%08x??, Size: %d (0x%03x), Cookie: 0x%01x" % 
                                        (b, a, (a+0x8), (ndx * block), (ndx * block), chunkCookie), address = a)   
@@ -1116,7 +1202,84 @@ def dump_FreeListInUse(pheap, window):
         else:
             window.Log("FreeList[0x%x] = %d" % (i,b))
         i+= 1
-           
+
+# set the freelist[n] for auditing
+# ================================
+def set_FreeList_chunks(imm, pheap, heap):
+    for a in range(0, 128):
+        entry = pheap.FreeList[a]
+        e = entry[0]
+        if e[0]:
+            if len(entry[1:]) >= 1:
+                for fc in entry[1:]:
+                    # anti-confusion, setup the needed chunks
+                    if len(entry[1:]) == 1:
+                        prevchunk_address = e[0]
+                    else:
+                        prevchunk_address = entry[1:][entry[1:].index(fc)-1][0]
+                    try:
+                        nextchunk_address = entry[1:][entry[1:].index(fc)+1][0]
+                    except:
+                        nextchunk_address = 1
+                    chunk_address  = fc[0]
+                    chunk_blink = fc[1]
+                    chunk_flink = fc[2]
+                    # distinwish from freelist[0] and freelist[n] 
+                    if a != 0:
+                        imm.addKnowledge("FreeListn_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
+                    elif a == 0:
+                        imm.addKnowledge("FreeList0_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
+                        
+
+def perform_heuristics(window, imm, pheap):
+    window.Log("")
+    window.Log("-" * 51)
+    window.Log("Performing heuristics against the BackEnd allocator")
+    window.Log("-" * 51)
+    window.Log("")
+    vuln_chunks = 0  
+    for knowledge in imm.listKnowledge():
+                        # match on all the freelist[0] chunks we added earlier 
+        if re.match("FreeList0_chunk_",knowledge):
+            vuln_chunks += freelist0_heuristics(window, knowledge, pheap, imm, "freelist", vuln_chunks)
+    window.Log("")
+    if vuln_chunks > 0:
+        window.Log("")
+        window.Log("Information regarding FreeList[0] attacks")
+        window.Log("=" * 41)
+        window.Log("")                      
+        window.Log("1. Freelist[0] insert attack:")
+        window.Log("-" * 29)
+        window.Log("The idea here is overwrite a chunks blink and set it to a lookaside[n] entry or function pointer table")
+        window.Log("1. Overwriten chunk's blink will be set to the Lookaside[n] list entry")
+        window.Log("2. Free chunk is inserted BEFORE the overwritten chunk write the address of the free chunk into blinks address (blink->inserted_chunk)")            
+        window.Log("3. Now lookaside[n]->inserted_chunk->overwritten_chunk->controlled_flink")
+        window.Log("4. Now pop 3 chunks off the lookaside[n] to get the controlled flink returned from RtlAllocateHeap")
+        window.Log("5. Overwrite a function pointer")
+        window.Log("")
+        window.Log("2. Freelist[0] search attack:")
+        window.Log("-" * 29)
+        window.Log("The idea here is overwrite a chunks flink and set it to a fake chunk.")
+        window.Log("1. Set the flink to an address at the base of the heap (eg: heapbase+0x188)")
+        window.Log("2. When a size that is bigger than the overwritten chunk is requested, it will return the fake chunk address-0x8 (heapbase+0x180)")                   
+        window.Log(" - You can set it to FreeList[0x41] or FreeList[0x42] and overwrite the RtlCommitRoutine pointer at offset heapbase+0x578")
+        window.Log(" - Or you could overwrite the blink/flink of a FreeList[n] entry itself..?")
+        window.Log("")
+        window.Log("3. Freelist[0] relinking attack:")
+        window.Log("-" * 32)
+        window.Log("The idea here is to control flink, so that you can indirectly control address that WILL point to the blink of the fake chunk")
+        window.Log("1. The chunk gets split and the relink chunk is inserted BEFORE the fake chunk")
+        window.Log("2. The address of the relink chunk is written to the fake chunks blink")
+        window.Log("3. The idea is to overwrite the pointer to the Lookaside (heapbase+0x580) with a pointer to the fake chunk")
+        window.Log(" - set the flink to be heapbase+0x57c")
+        window.Log(" - set the fake chunk to be heapbase+0x574")
+        window.Log(" - flink of fake chunk will be at heapbase+0x57c")
+        window.Log(" - blink of fake chunk will be heapbase+0x580, thus overwriting heapbase+0x688 with the relink chunk address")                        
+        window.Log("")
+        window.Log("(!) Heuristics check completed")
+    elif vuln_chunks <= 0:
+        window.Log("(!) No vulnerable checks were identified")     
+                                   
 # for <= XP only
 def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="freelist_graph"):
     if graphic_structure:
@@ -1170,12 +1333,12 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                     # win32heapchunk API does not accommodate for the cookie, so lets do it manually 
                     # header [0x2 - size][0x2 - previous size][0x1 - cookie][0x1 - flag][0x1 - unused][0x1 - segment index]
                     chunkCookie = imm.readMemory(chunk_address-0x4, 1) # chunk_address includes header
-                    chunkCookie = reverse(chunkCookie)
-                    chunkCookie = int(binascii.hexlify(chunkCookie),16)                    
+                    (chunkCookie) = struct.unpack("B", chunkCookie)
+                                    
                     chunk_data = "Chunk (%d) 0x%08x\nBlink (0x%08x)\nFlink (0x%08x)" % (chunkNum, chunk_address, chunk_blink, chunk_flink)
                     chunkNum += 1
                     window.Log("         * Chunk [%d]: 0x%08x  [blink : 0x%08x  | flink : 0x%08x] " % (chunkNum, chunk_address, chunk_blink, chunk_flink), address = chunk_address) 
-                    window.Log("                 [%d]: size: 0x%04x | calculated size: %d (0x%04x) - cookie: 0x%02x" % (chunkNum, sz, calc_sz, calc_sz, chunkCookie), address = chunk_address) 
+                    window.Log("                 [%d]: size: 0x%04x | calculated size: %d (0x%04x) - cookie: 0x%02x" % (chunkNum, sz, calc_sz, calc_sz, chunkCookie[0]), address = chunk_address) 
                     if graphic_structure:
                         chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#3366ff"))
                     
@@ -1375,8 +1538,8 @@ def dump_function_pointers(window, imm, writable_segment, patch=False, restore=F
                 window.Log("-" * 60)
                 window.Log("(%04d) Pointer      :  0x%08x" % (j, obj.address),obj.address)
                 function = imm.readMemory(obj.address, 4)
-                function = reverse(function)
-                function = int(binascii.hexlify(function),16)
+                (function) = struct.unpack("L", function)
+                
                 window.Log("       Function     : 0x%08x" % (function),function)
                 window.Log("       Module Name  : %s" % imm.getModuleByAddress(function).getName())
                 window.Log("       First Opcode : %s" % imm.disasm(function).getDisasm())
@@ -1495,8 +1658,7 @@ def analyse_heap(heap, imm, window):
                     
         # libheap does not have some members, so we are on our own
         ProcessHeapsListIndex = imm.readMemory(heap+0x30, 2)
-        ProcessHeapsListIndex = reverse(ProcessHeapsListIndex)
-        ProcessHeapsListIndex = int(binascii.hexlify(ProcessHeapsListIndex),16)
+        (ProcessHeapsListIndex) = struct.unpack("H", ProcessHeapsListIndex)
                     
         window.Log("+0x030 ProcessHeapsListIndex          : 0x%08x" % ProcessHeapsListIndex, ProcessHeapsListIndex)
         window.Log("+0x032 HeaderValidateLength           : 0x%08x" % pheap.HeaderValidateLength, pheap.HeaderValidateLength)
@@ -1571,8 +1733,6 @@ def main(args):
         # ==============================
         if args[0].lower().strip() == "help":
             if args[1].lower().strip() in available_commands:
-                
-
                 usageText = cmds[args[1].lower().strip()].usage.split("\n")
                 for line in usageText:
                     imm.log(line)
@@ -1674,8 +1834,7 @@ def main(args):
                     return "Invalid heap address!"
                 if imm.getOsVersion() == "xp":
                     FrontEndHeap = imm.readMemory(heap+0x580, 4)
-                    FrontEndHeap = reverse(FrontEndHeap)
-                    FrontEndHeap = int(binascii.hexlify(FrontEndHeap),16) 
+                    (FrontEndHeap) = struct.unpack("L", FrontEndHeap)                    
                     window.Log("-" * 77)
                     window.Log("Lookaside List structure @ 0x%08x" % FrontEndHeap)
                     window.Log("-" * 77)
@@ -1715,53 +1874,8 @@ def main(args):
                         
                     dump_FreeListInUse(pheap, window)
                     
-                    # TODO: finish hueristics
-                    window.Log("")
-                    window.Log("-" * 46)
-                    window.Log("Performing heuristics against corrupted chunks")
-                    window.Log("-" * 46)
-                    vuln_chunks = 0  
-                    for knowledge in imm.listKnowledge():
-                        # match on all the freelist[0] chunks we added earlier 
-                        if re.match("FreeList0_chunk_",knowledge):
-                            vuln_chunks += freelist0_heuristics(window, knowledge, pheap, imm, "freelist", vuln_chunks)
-                    window.Log("")
-                    if vuln_chunks > 0:
-                        window.Log("")
-                        window.Log("Information regarding FreeList[0] attacks")
-                        window.Log("=" * 41)
-                        window.Log("")                      
-                        window.Log("1. Freelist[0] insert attack:")
-                        window.Log("-" * 29)
-                        window.Log("The idea here is overwrite a chunks blink and set it to a lookaside[n] entry or function pointer table")
-                        window.Log("1. Overwriten chunk's blink will be set to the Lookaside[n] list entry")
-                        window.Log("2. Free chunk is inserted BEFORE the overwritten chunk write the address of the free chunk into blinks address (blink->inserted_chunk)")            
-                        window.Log("3. Now lookaside[n]->inserted_chunk->overwritten_chunk->controlled_flink")
-                        window.Log("4. Now pop 3 chunks off the lookaside[n] to get the controlled flink returned from RtlAllocateHeap")
-                        window.Log("5. Overwrite a function pointer")
-                        window.Log("")
-                        window.Log("2. Freelist[0] search attack:")
-                        window.Log("-" * 29)
-                        window.Log("The idea here is overwrite a chunks flink and set it to a fake chunk.")
-                        window.Log("1. Set the flink to an address at the base of the heap (eg: heapbase+0x188)")
-                        window.Log("2. When a size that is bigger than the overwritten chunk is requested, it will return the fake chunk address-0x8 (heapbase+0x180)")                   
-                        window.Log("- You can set it to FreeList[0x41] or FreeList[0x42] and overwrite the RtlCommitRoutine pointer at offset heapbase+0x578")
-                        window.Log("- Or you could overwrite the blink/flink of a FreeList[n] entry itself..?")
-                        window.Log("")
-                        window.Log("3. Freelist[0] relinking attack:")
-                        window.Log("-" * 32)
-                        window.Log("The idea here is to control flink, so that you can indirectly control address that WILL point to the blink of the fake chunk")
-                        window.Log("1. The chunk gets split and the relink chunk is inserted BEFORE the fake chunk")
-                        window.Log("2. The address of the relink chunk is written to the fake chunks blink")
-                        window.Log("3. The idea is to overwrite the pointer to the Lookaside (heapbase+0x580) with a pointer to the fake chunk")
-                        window.Log(" - set the flink to be heapbase+0x57c")
-                        window.Log(" - set the fake chunk to be heapbase+0x574")
-                        window.Log(" - flink of fake chunk will be at heapbase+0x57c")
-                        window.Log(" - blink of fake chunk will be heapbase+0x580, thus overwriting heapbase+0x688 with the relink chunk address")                        
-                        window.Log("")
-                        window.Log("(!) Heuristics check completed")
-                    elif vuln_chunks <= 0:
-                        window.Log("(!) No vulnerable checks were identified") 
+                    # TODO: finish heuristics
+                    perform_heuristics(window, imm, pheap) 
                     
                     # HeapCache
                     if pheap.HeapCache:
@@ -1774,11 +1888,12 @@ def main(args):
                         window.Log("-----------------")
                         dump_HeapCache_bitmap(pheap, window)
 
-                    # do vista and windows 7 freelist analyse?
+                # do vista and windows 7 freelist analyse?
                 else:
                     window.Log("(-) Freelist analyse not supported under Vista and above")
             
-            # analyse heap cache if it exists:
+            # analyse heap cache if it exists
+            # ===============================
             elif args[0].lower().strip() == "analyseheapcache" or args[0].lower().strip() == "ahc":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -1804,7 +1919,26 @@ def main(args):
                         window.Log("    2. De-commiting 256 blocks")
                         return "(-) The HeapCache is inactive for this heap!"
                                                
+            # perform hueristics
+            # ==================
+            elif args[0].lower().strip() == "exploit" or args[0].lower().strip() == "exp":
+                try:
+                    pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
+                except:
+                    window.Log("Invalid heap address!")
+                    return "Invalid heap address!"
+                if "-f" in args:
+                    window.Log("(+) FrontEnd is still being developed")
+                elif "-b" in args:
+                    set_FreeList_chunks(imm, pheap, heap)
+                    perform_heuristics(window, imm, pheap)
+                else:
+                    window.Log("")
+                    window.Log("(-) Please provide the correct arguments. Run !heaper help <command> for help")           
+                    return "(-) Please provide the correct arguments. Run !heaper help <command> for help"
+            
             # analyse FreelistInUse
+            # =====================
             elif args[0].lower().strip() == "freelistinuse" or args[0].lower().strip() == "fliu":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -1828,6 +1962,7 @@ def main(args):
                     dump_FreeListInUse(pheap, window)
                 
             # analyse segment chunks
+            # ======================
             elif args[0].lower().strip() == "analysechunks" or args[0].lower().strip() == "ac":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -1884,6 +2019,7 @@ def main(args):
                         dumpchunk_info(chunk, show_detail, window)
                         
             # dump function pointers
+            # ======================
             elif args[0].lower().strip() == "dumpfunctionpointer" or args[0].lower().strip() == "dfp":
                 writable_segment = 0x00000000
                 writable_segment_size = 0x0
@@ -1898,11 +2034,11 @@ def main(args):
                 if not writable_segment and not writable_segment_size:
                     return ".data segment not found"
 
-                for ar in args:
-                    if ar == "-p":
-                        patch = True
-                    if ar == "-r":
-                        restore = True
+                if "-p" in args:
+                    patch = True
+                elif "-r" in args:
+                    restore = True
+
                 if patch:
                     if len(args) == 3:
                         if args[2].lower() != "all":
@@ -1913,7 +2049,7 @@ def main(args):
                         else:
                             address_to_patch = args[2].lower()
                     else:
-                        return "(-) Please specficy which pointer to patch... eg: all / 00514450"
+                        return "(-) Please specify which pointer to patch... eg: all / 0x00514450"
                   
                     window.Log("-" * 60)
                     if args[2].lower() != "all":
@@ -1942,6 +2078,7 @@ def main(args):
                 return dump_function_pointers(window, imm, writable_segment, patch, restore, address_to_patch)
             
             # analyse segments
+            # ================
             elif args[0].lower().strip() == "analysesegments" or args[0].lower().strip() == "as":
                 pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
                 dump_segment_structure(pheap, window, imm, heap)
@@ -1949,20 +2086,7 @@ def main(args):
             elif args[0].lower().strip() == "hook" or args[0].lower().strip() == "h":
                 window.Log("")
                 valid_functions = ["alloc", "free", "create","destroy","realloc","size","createcs","deletecs","all","setuef"]
-                # flags
-                FilterHeap = False
-                Disable = False
-                AllocFlag = False
-                FreeFlag = False
-                CreateFlag = False
-                DestroyFlag = False
-                ReAllocFlag = False
-                sizeFlag = False
-                CreateCSFlag = False
-                DeleteCSFlag = False
-                setuefFlag = False
-                setVAllocFlag = False
-                setVFreeFlag = False
+
                 
                 if len(args) > 2:
                     if (args[2].lower().strip() == "-h" or args[2].lower().strip() == "-u"):
