@@ -36,7 +36,6 @@ import immlib
 from immlib import LogBpHook
 import immutils
 import libdatatype
-import binascii
 import pydot
 import struct
 import re
@@ -64,6 +63,9 @@ opennewwindow = False
 # graphic flag
 # ============
 graphic_structure = False
+
+# lookaside heuristic flag
+lookaside_corrupt = False
 
 # hook tags
 # =========
@@ -208,6 +210,7 @@ def chr_to_hex(n):
         myvalue.append(tempval)
     return "".join(myvalue)
 
+# just incase we will need this
 def reverse(text):
     return ''.join([text[i] for i in range(len(text)-1,-1,-1)])
 
@@ -223,6 +226,7 @@ class set_command:
         self.alias = alias
 
 # RtlFreeHeap Hook class
+# update for WIN7 heap (rendomized)
 class function_hook(LogBpHook):
     """
     Class to get the particular functions arguments for a debug instance
@@ -592,131 +596,195 @@ def set_up_usage():
     return cmds
 
 # TODO: build heuristics to detect exploitable paths...
-# FreeList[0] complete, FreeList[n] and Lookaside[n] to go...
-def freelist0_heuristics(window, chunk_data, pheap, imm, data_structure, vuln_chunks):
-    # extract the corrupt data
-    corrupt_chunk_data = imm.getKnowledge(chunk_data)
-    corrupt_chunk_size = corrupt_chunk_data[0]
-    corrupt_chunk_address = corrupt_chunk_data[1]
-    corrupt_chunk_blink = corrupt_chunk_data[2]
-    corrupt_chunk_flink = corrupt_chunk_data[3]
-    entry_offset = corrupt_chunk_data[4]
-    # real values
-    blink = corrupt_chunk_data[4]
-    flink = corrupt_chunk_data[5]
-    
-    
-    # check for FreeList[0] insert, search, blocksplit
-    if data_structure == "freelist" and corrupt_chunk_size == 0:
+# FreeList[n] to go (bitmap flip)
+def freelist_and_lookaside_heuristics(window, chunk_data, pheap, imm, data_structure, vuln_chunks):
 
+    # check for FreeList
+    if data_structure == "freelistn" or data_structure == "freelist0":
+        # extract the corrupt data
+        corrupt_chunk_data = imm.getKnowledge(chunk_data)
+        corrupt_chunk_size = corrupt_chunk_data[0]
+        corrupt_chunk_address = corrupt_chunk_data[1]
+        corrupt_chunk_blink = corrupt_chunk_data[2]
+        corrupt_chunk_flink = corrupt_chunk_data[3]
+        entry_offset = corrupt_chunk_data[4]
+        # real values
+        blink = corrupt_chunk_data[4]
+        flink = corrupt_chunk_data[5]
+        # ensure that we are dealing with FreeList[0]
+        if corrupt_chunk_size == 0:
         # search all the chunks
-        for index, chunk in enumerate(pheap.chunks):
-            # compare chunk addresses and if the sizes are the same, 
-            # i suspect at least a 4 byte overwrite..
-            if (corrupt_chunk_address-0x8) == chunk.addr:
-                # if its the last chunk in the freelist[0] we can only check if we modify past
-                # 2 bytes, else we just have to check the 1st byte!
-                # this check can be inhanced further for freelist[n]
-                if ((flink == 1 and pheap.chunks[index-1].size != chunk.psize) 
-                    or (flink != 1 and pheap.chunks[index+1].psize != chunk.size
-                    and pheap.chunks[index-1].size != chunk.psize)):
+            for index, chunk in enumerate(pheap.chunks):
+                # compare chunk addresses and if the sizes are the same, 
+                # i suspect at least a 4 byte overwrite..
+                if (corrupt_chunk_address-0x8) == chunk.addr:
                     
-                    window.Log("")
-                    window.Log("(+) Detected corrupted chunk in FreeList[0x%02x] chunk address 0x%08x" % (corrupt_chunk_size,corrupt_chunk_address-0x8))
-                    window.Log("")
-                    if flink == 1:
-                        window.Log(" -> This chunk is the last entry in FreeList[0]")
-                    elif flink != 1:
-                        window.Log(" -> This chunk is number %d in FreeList[0]" % index)   
-                    # 1st lets check for freelist insert attack vector
-                    window.Log("")
-                    window.Log(" > Freelist[0] insert attack:")
-                    window.Log("    - Free a chunk of size > %d (0x%02x) < %d (0x%02x)" % 
-                               (pheap.chunks[index-1].size, pheap.chunks[index-1].size, pheap.chunks[index].size, pheap.chunks[index].size))
-                    # blink checks
-                    if corrupt_chunk_blink != blink:
-                        window.Log("    - Blink was detected to be overwritten (0x%08x), try setting it to a lookaside[n] entry or a function pointer table" % corrupt_chunk_blink)
-                    else:
-                        window.Log("    - Try to overwrite the blink for this chunk so you can control what the address that points to the inserted chunk or try another attack")
-                
-                    window.Log("")
-                    window.Log(" > Freelist[0] search attack:")
-                    window.Log("    - Overwrite with a size you can allocate. Current size: %d (0x%02x)" % (pheap.chunks[index].size, pheap.chunks[index].size))
-                    # if flink == 0x1, its the last chunk in the list entry
-                    if (flink == 0x1 and entry_offset != corrupt_chunk_flink) or (flink != 0x1 and flink != corrupt_chunk_flink):
-                        window.Log("    - Flink was detected to be overwritten (0x%08x), try setting it to a fake chunk structure" % corrupt_chunk_flink)
-                    else:
-                        window.Log("    - Try to overwrite the flink for this chunk so you can point it to a fake chunk or try another attack")
-                           
-                    window.Log("")
-                    window.Log(" > Freelist[0] relinking attack:")
-                    window.Log("    - Overwrite with a size you can allocate. Current size: %d (0x%02x)" % (pheap.chunks[index].size, pheap.chunks[index].size))
-                    # if flink == 0x1, its the last chunk in the list entry
-                    if (flink == 0x1 and corrupt_chunk_address != corrupt_chunk_flink) or (flink != 0x1 and flink != corrupt_chunk_flink):
-                        window.Log("    - Flink was detected to be overwritten (0x%08x), try setting it to a fake chunk structure" % corrupt_chunk_flink)
-                    else:
-                        window.Log("    - Try to overwrite the flink for this chunk so you can point it to a fake chunk or try another attack")
-                    # information for the user..
-                    vuln_chunks += 1
+                    if ((pheap.chunks[index-1].size != chunk.psize) 
+                        and (pheap.chunks[index+1].psize != chunk.size
+                        and pheap.chunks[index-1].size != chunk.psize)):
+                        window.Log("buggy")
                     
-                # Validate the HeapCache
-                # ====================== 
-                if pheap.HeapCache:
-                    bit_list, chunk_dict = get_heapCache_bitmap(pheap, True)                   
-                    if chunk.size in range (0x80, 0x400):
-                        if bit_list[chunk.size] != 1:
-                            window.Log("(+) Detected corrupted chunk in HeapCache bitmap[0x%04x] chunk address 0x%08x" % (chunk_dict[corrupt_chunk_address-0x8],corrupt_chunk_address-0x8),corrupt_chunk_address-0x8)
-                            window.Log("")
-                            # last chunk so we can get the size by 
-                            if flink == 1:
-                                window.Log(" -> This chunk is the last entry in FreeList[0]")
-                            elif flink != 1:
-                                window.Log(" -> This chunk is number %d in FreeList[0]" % index)
-                            window.Log("")
-                            window.Log(" > HeapCache de-synchronization attack:") 
-                            if chunk.size > chunk_dict[corrupt_chunk_address-0x8]:
-                                window.Log("    - Size has been overwritten with a larger value! %d (0x%04x) try to overwrite the chunk with a size < %d (0x%04x)" % (chunk.size, chunk.size, chunk_dict[corrupt_chunk_address-0x8],chunk_dict[corrupt_chunk_address-0x8]))
-                            elif chunk.size < chunk_dict[corrupt_chunk_address-0x8]:
-                                window.Log("    - Excellant! Size has been overwritten with a smaller value!  ")                       
-                            # if the bitmask before our corrupted size is set, were fucked.
-                            if bit_list[chunk_dict[corrupt_chunk_address-0x8]-0x1] == 1:
-                                window.Log("(-) HeapCache de-synchronization size attack will not work because there are no avalaible ")
-                                window.Log("    chunk sizes between the last set bucket entry and this chunks bucket entry!")
-                                window.Log("")
-                                window.Log("    -> bitmap[0x%04x] MUST be 0" % (chunk_dict[corrupt_chunk_address-0x8]-0x1))
-                            
-                            # else, we have a chance to exploit it...
-                            else:
-                                window.Log("    - Allocate a chunk of size %d (0x%02x) or overwrite another size" % ((chunk.size-0x1 * 0x8), chunk.size))
-                                
-                                for size in range (chunk_dict[corrupt_chunk_address-0x8]-0x1, 0x7f, -1):
-                                    if bit_list[size] == 1:
-                                        break
-                                if size+0x1 < chunk_dict[corrupt_chunk_address-0x8]:
-                                    window.Log("    -> Available chunk sizes to overwrite with:")
-                                    window.Log("")
-                                    for ow_size in range(size+0x1, chunk_dict[corrupt_chunk_address-0x8]):
-                                        window.Log("        HEAP_CACHE[0x%04x]" % ow_size)                               
-                            
-                            vuln_chunks += 1
-                    # else its overwritten with a value outside of FreeList[0] possible values
-                    elif chunk.size not in range (0x80, 0x400):
+                    # if its the last chunk in the freelist[0] we can only check if we modify past
+                    # 2 bytes, else we just have to check the 1st byte!
+                    # this check can be inhanced further for freelist[n]
+                    elif ((flink == 1 and pheap.chunks[index-1].size != chunk.psize) 
+                        or (flink != 1 and pheap.chunks[index+1].psize != chunk.size
+                        and pheap.chunks[index-1].size != chunk.psize)):
+                        
                         window.Log("")
-                        window.Log("(+) Detected corrupted chunk in HeapCache bitmap[0x%04x] chunk address 0x%08x" % (chunk_dict[corrupt_chunk_address-0x8],corrupt_chunk_address-0x8),corrupt_chunk_address-0x8)
+                        window.Log("(+) Detected corrupted chunk in FreeList[0x%02x] chunk address 0x%08x" % (corrupt_chunk_size,corrupt_chunk_address-0x8))
                         window.Log("")
                         if flink == 1:
                             window.Log(" -> This chunk is the last entry in FreeList[0]")
                         elif flink != 1:
-                            window.Log(" -> This chunk is number %d in FreeList[0]" % index)                 
+                            window.Log(" -> This chunk is number %d in FreeList[0]" % index)   
+                        # 1st lets check for freelist insert attack vector
                         window.Log("")
-                        window.Log("(!) This chunk was overwritten with a size value (0x%04x) that is outside of the range of FreeList[0]" % chunk.size)
-                
-                else:
-                    window.Log("(!) The HeapCache is inactive for this FreeList[0].")
+                        window.Log(" > Freelist[0] insert attack:")
+                        window.Log("    - Free a chunk of size > %d (0x%02x) < %d (0x%02x)" % 
+                                   (pheap.chunks[index-1].size, pheap.chunks[index-1].size, pheap.chunks[index].size, pheap.chunks[index].size))
+                        # blink checks
+                        if corrupt_chunk_blink != blink:
+                            window.Log("    - Blink was detected to be overwritten (0x%08x), try setting it to a lookaside[n] entry or a function pointer table" % corrupt_chunk_blink)
+                        else:
+                            window.Log("    - Try to overwrite the blink for this chunk so you can control what the address that points to the inserted chunk or try another attack")
+                    
+                        window.Log("")
+                        window.Log(" > Freelist[0] search attack:")
+                        window.Log("    - Overwrite with a size you can allocate. Current size: %d (0x%02x)" % (pheap.chunks[index].size, pheap.chunks[index].size))
+                        # if flink == 0x1, its the last chunk in the list entry
+                        if (flink == 0x1 and entry_offset != corrupt_chunk_flink) or (flink != 0x1 and flink != corrupt_chunk_flink):
+                            window.Log("    - Flink was detected to be overwritten (0x%08x), try setting it to a fake chunk structure" % corrupt_chunk_flink)
+                        else:
+                            window.Log("    - Try to overwrite the flink for this chunk so you can point it to a fake chunk or try another attack")
+                               
+                        window.Log("")
+                        window.Log(" > Freelist[0] relinking attack:")
+                        window.Log("    - Overwrite with a size you can allocate. Current size: %d (0x%02x)" % (pheap.chunks[index].size, pheap.chunks[index].size))
+                        # if flink == 0x1, its the last chunk in the list entry
+                        if (flink == 0x1 and corrupt_chunk_address != corrupt_chunk_flink) or (flink != 0x1 and flink != corrupt_chunk_flink):
+                            window.Log("    - Flink was detected to be overwritten (0x%08x), try setting it to a fake chunk structure (heapbase+0x057c)." % corrupt_chunk_flink)
+                            
+                        else:
+                            window.Log("    - Try to overwrite the flink for this chunk so you can point it to a fake chunk structure (heapbase+0x057c).")
+                        window.Log("    - This will allocate a pointer from the base and may allow you to take control by overwriting the heapbase using the RtlCommitRoutine")
+                        # information for the user..
+                        vuln_chunks += 1
+                        
+                    # Validate the HeapCache
+                    # ====================== 
+                    if pheap.HeapCache:
+                        bit_list, chunk_dict = get_heapCache_bitmap(pheap, True)                   
+                        if chunk.size in range (0x80, 0x400):
+                            if bit_list[chunk.size] != 1:
+                                window.Log("(+) Detected corrupted chunk in HeapCache bitmap[0x%04x] chunk address 0x%08x" % (chunk_dict[corrupt_chunk_address-0x8],corrupt_chunk_address-0x8),corrupt_chunk_address-0x8)
+                                window.Log("")
+                                # last chunk so we can get the size by 
+                                if flink == 1:
+                                    window.Log(" -> This chunk is the last entry in FreeList[0]")
+                                elif flink != 1:
+                                    window.Log(" -> This chunk is number %d in FreeList[0]" % index)
+                                window.Log("")
+                                window.Log(" > HeapCache de-synchronization attack:") 
+                                if chunk.size > chunk_dict[corrupt_chunk_address-0x8]:
+                                    window.Log("    - Size has been overwritten with a larger value! %d (0x%04x) try to overwrite the chunk with a size < %d (0x%04x)" % (chunk.size, chunk.size, chunk_dict[corrupt_chunk_address-0x8],chunk_dict[corrupt_chunk_address-0x8]))
+                                elif chunk.size < chunk_dict[corrupt_chunk_address-0x8]:
+                                    window.Log("    - Excellant! Size has been overwritten with a smaller value!  ")                       
+                                # if the bitmask before our corrupted size is set, were fucked.
+                                if bit_list[chunk_dict[corrupt_chunk_address-0x8]-0x1] == 1:
+                                    window.Log("(-) HeapCache de-synchronization size attack will not work because there are no avalaible ")
+                                    window.Log("    chunk sizes between the last set bucket entry and this chunks bucket entry!")
+                                    window.Log("")
+                                    window.Log("    -> bitmap[0x%04x] MUST be 0" % (chunk_dict[corrupt_chunk_address-0x8]-0x1))
+                                
+                                # else, we have a chance to exploit it...
+                                else:
+                                    window.Log("    - Allocate a chunk of size %d (0x%02x) or overwrite another size" % ((chunk.size-0x1 * 0x8), chunk.size))
+                                    
+                                    for size in range (chunk_dict[corrupt_chunk_address-0x8]-0x1, 0x7f, -1):
+                                        if bit_list[size] == 1:
+                                            break
+                                    if size+0x1 < chunk_dict[corrupt_chunk_address-0x8]:
+                                        window.Log("    -> Available chunk sizes to overwrite with:")
+                                        window.Log("")
+                                        for ow_size in range(size+0x1, chunk_dict[corrupt_chunk_address-0x8]):
+                                            window.Log("        HEAP_CACHE[0x%04x]" % ow_size)                               
+                                
+                                vuln_chunks += 1
+                        # else its overwritten with a value outside of FreeList[0] possible values
+                        elif chunk.size not in range (0x80, 0x400):
+                            window.Log("")
+                            window.Log("(+) Detected corrupted chunk in HeapCache bitmap[0x%04x] chunk address 0x%08x" % (chunk_dict[corrupt_chunk_address-0x8],corrupt_chunk_address-0x8),corrupt_chunk_address-0x8)
+                            window.Log("")
+                            if flink == 1:
+                                window.Log(" -> This chunk is the last entry in FreeList[0]")
+                            elif flink != 1:
+                                window.Log(" -> This chunk is number %d in FreeList[0]" % index)                 
+                            window.Log("")
+                            window.Log("(!) This chunk was overwritten with a size value (0x%04x) that is outside of the range of FreeList[0]" % chunk.size)
+        # remove the obj for next run
+        imm.forgetKnowledge(chunk_data)
+        return vuln_chunks
 
-    # remove the obj for next run
-    imm.forgetKnowledge(chunk_data)
-    return vuln_chunks
+
+    elif data_structure == "lookaside":
+        if pheap.Lookaside:
+            for ndx in range(0, len(pheap.Lookaside)):
+                entry = pheap.Lookaside[ndx]   
+                        
+                if not entry.isEmpty():
+                    #window.Log("Lookaside[0x%03x] No. of chunks: %d, ListEntry: 0x%08x, Size: (%d+8=%d)" % 
+                    #(ndx, entry.Depth, entry.addr, (ndx*8), (ndx*8+8)), address = entry.addr) 
+                    no_chunk = 0              
+                    for a in entry.getList():
+                        no_chunk += 1 
+                        chunk_size = ""
+                        try:
+                            # size
+                            chunk_size = imm.readMemory(a, 0x2)
+                            chunk_size = struct.unpack("H", chunk_size)[0]
+                            # flink
+                            chunk_flink = imm.readMemory(a+0x8, 0x4)
+                            chunk_flink = struct.unpack("L", chunk_flink)[0]
+                        except:
+                            window.Log("(-) Cannot read chunk address: 0x%08x" % a)
+                            pass
+                        lookaside_chunk_list = entry.getList()
+                        try:
+                            next_chunk = lookaside_chunk_list[lookaside_chunk_list.index(a)+1]
+                        except:
+                            next_chunk = 0
+                            
+                        try:
+                            prev_chunk = lookaside_chunk_list[lookaside_chunk_list.index(a)-1]
+                        except:
+                            prev_chunk = 0
+                        #window.Log("len: %d vs ndx: %d" % (len(pheap.Lookaside),ndx))
+                        #window.Log("chunk: %x, flink: %x, sflink: %x" % (a,next_chunk, chunk_flink-0x8))
+                        # first lets check the size
+                        
+                        if chunk_size != ndx and (next_chunk == 0 or next_chunk == (chunk_flink-0x8)):
+                            #lookaside_corrupt = True
+                            vuln_chunks += 1 
+                            window.Log("")    
+                            window.Log("(!) Size has not been set for chunk 0x%08x, possibly because it doesnt exist" % a)
+                            window.Log("(+) This is likley the previous chunks flink! (0x%08x)" % prev_chunk, prev_chunk)
+                            alloc_size = (ndx-0x01)*0x8
+                            window.Log("(+) Try to set the address to a controlled pointer and make %d allocations using size %d (0x%04x)" % (no_chunk,alloc_size,alloc_size))
+                            window.Log("(!) This will set the allocation pointer to the function pointer and allow you to overwrite its value.. ")
+                            window.Log("")
+                        # overwrite the size, but not the flink..    
+                        elif chunk_size != ndx and (next_chunk != (chunk_flink-0x8) or next_chunk != 0):
+                            vuln_chunks += 1
+                            #lookaside_corrupt = True
+                            window.Log("")
+                            window.Log("(!) Size has been overwritten for chunk 0x%08x" % a)
+                            window.Log("(+) Try to overwrite the flink for this chunk")                            
+                            window.Log("")
+             
+        # remove the obj for next run
+        imm.forgetKnowledge(chunk_data)
+        return vuln_chunks
     
 def dump_heap(imm):
     imm.log("Listing available heaps: ")
@@ -902,7 +970,6 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
     # we use the api where we can ;)
     if pheap.Lookaside:
         no_chunks = 0
-        #window.Log("lookaside: 0x%08x" % pheap.Lookaside)
         for ndx in range(0, len(pheap.Lookaside)):
             entry = pheap.Lookaside[ndx]
             chunk_nodes = []    
@@ -925,8 +992,8 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                     chunk_read_self_size = ""
                     try:
                         chunk_read_self_size = imm.readMemory(a, 0x2)
-                        chunk_read_self_size = struct.unpack("H", chunk_read_self_size)
-                        chunk_read_self_size = chunk_read_self_size*8
+                        chunk_read_self_size = struct.unpack("H", chunk_read_self_size)[0]
+                        #chunk_read_self_size = chunk_read_self_size*8
                     except:
                         pass
                         
@@ -942,18 +1009,16 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                     chunk_overwrite = False
                     try:
                         flink = imm.readMemory(a+0x8, 0x4)
-                        (flink) = struct.unpack("L", flink)
+                        flink = struct.unpack("L", flink)[0]
                     except:
                         chunk_overwrite = True
                     if not chunk_overwrite:
-                        chunk_data = ("chunk (%d) 0x%08x \nFlink 0x%08x-0x08" % (b, a, (flink[0])))
+                        chunk_data = ("chunk (%d) 0x%08x \nFlink 0x%08x-0x08" % (b, a, (flink)))
                     elif chunk_overwrite:
                         chunk_data = ("chunk (%d) 0x%08x \nFlink ??0x%08x??" % (b, a, (a + 0x8)))
 
                     # else the expected chunk size is not the same as the read in chunk..
-                    if (chunk_read_self_size[0] * block) != (ndx * block):
-                        window.Log("readinsize: 0x%04x" % chunk_read_self_size[0])
-                        window.Log("calc: 0x%04x" % (ndx * block))
+                    if (chunk_read_self_size * block) != (ndx * block):
                         # if the size has been overwritten.....
                         if chunk_read_self_size != "":
                             if graphic_structure:
@@ -961,7 +1026,7 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                                 (a), style="filled", shape="rectangle", label=chunk_data+"\nSize overwritten..", fillcolor="red"))
                             if not chunk_overwrite:
                                 window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x, Size: %d (0x%03x)" % 
-                                (b, a, flink, chunk_read_self_size[0], chunk_read_self_size[0]), address = a) 
+                                (b, a, flink, chunk_read_self_size, chunk_read_self_size), address = a) 
                                 window.Log("        -> chunk size should have been %d (0x%04x)! We have a possible chunk overwrite.." % 
                                 (ndx * block, ndx * block), focus=1)
                             elif chunk_overwrite:
@@ -980,13 +1045,13 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                                 window.Log("        -> failed to read chunk @ 0x%08x!" % a, address = a)
                                 if graphic_structure:
                                     chunk_nodes.append(pydot.Node("chunk_overwrite", style="filled", shape="rectangle", label=chunk_data+"\nFlink overwrite...", fillcolor="red"))
-                    elif (chunk_read_self_size[0] * block) == (ndx * block):
+                    elif (chunk_read_self_size * block) == (ndx * block):
                         b += 1
                         if graphic_structure:
                             chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#3366ff"))
                         if not chunk_overwrite:
                             window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x-0x8, Size: %d (0x%03x), Cookie: 0x%01x" % 
-                                       (b, a, (flink[0]), (ndx * block), (ndx * block), chunkCookie[0]), address = a) 
+                                       (b, a, (flink), (ndx * block), (ndx * block), chunkCookie[0]), address = a) 
                         elif chunk_overwrite:
                             window.Log("    chunk [%d]: 0x%08x, Flink: ??0x%08x??, Size: %d (0x%03x), Cookie: 0x%01x" % 
                                        (b, a, (a+0x8), (ndx * block), (ndx * block), chunkCookie), address = a)   
@@ -1203,6 +1268,58 @@ def dump_FreeListInUse(pheap, window):
             window.Log("FreeList[0x%x] = %d" % (i,b))
         i+= 1
 
+def set_Lookaside_chunks(imm, pheap, heap):
+    if pheap.Lookaside:
+        for ndx in range(0, len(pheap.Lookaside)):
+            entry = pheap.Lookaside[ndx]
+                    
+            if not entry.isEmpty():
+                
+                for a in entry.getList():
+                    lookaside_list = entry.getList()
+                    # get the chunk address so that we point to the header
+                    prev_chunk = lookaside_list[lookaside_list.index(a)-1]-0x8
+                    
+                    chunk_address = a
+                    # get the chunks self size
+                    
+                    try:
+                        chunk_size = imm.readMemory(a, 0x2)
+                        chunk_size = struct.unpack("H", chunk_size)[0]
+                        chunk_size = chunk_size*8
+                    except:
+                        chunk_size = ""
+                    try:
+                        chunk_psize = imm.readMemory(a+0x2, 0x2)
+                        chunk_psize = struct.unpack("H", chunk_psize)[0]
+                        chunk_psize = chunk_psize*8  
+                    except:
+                        chunk_psize = ""
+                                          
+                        
+                    # get the chunks cookie
+                    
+                    try:
+                        chunkCookie = imm.readMemory(a+0x4, 0x1)
+                        chunkCookie = struct.unpack("B", chunkCookie)[0]
+                    except:
+                        chunkCookie = ""
+                    
+                    # validate the flink!
+                    flink_overwrite = False
+                    try:
+                        flink = imm.readMemory(a+0x8, 0x4)
+                        flink = struct.unpack("L", flink)
+                        #next_chunk = flink-0x8
+                    except:
+                        flink_overwrite = True                    
+                    
+                    # before we fudge it..
+                    if flink_overwrite:
+                        break                     
+                    imm.addKnowledge("Lookasiden_chunk_%x" % chunk_address, [chunk_address, flink, prev_chunk], force_add = 1)
+       
+
 # set the freelist[n] for auditing
 # ================================
 def set_FreeList_chunks(imm, pheap, heap):
@@ -1231,19 +1348,38 @@ def set_FreeList_chunks(imm, pheap, heap):
                         imm.addKnowledge("FreeList0_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
                         
 
-def perform_heuristics(window, imm, pheap):
+def perform_heuristics(window, imm, pheap, allocator):
     window.Log("")
-    window.Log("-" * 51)
-    window.Log("Performing heuristics against the BackEnd allocator")
-    window.Log("-" * 51)
+    if allocator == "BackEnd":
+        header_line_sz = 51
+    elif allocator == "FrontEnd":
+        header_line_sz = 52
+    window.Log("-" * header_line_sz)
+    window.Log("Performing heuristics against the %s allocator" % allocator)
+    window.Log("-" * header_line_sz)
     window.Log("")
-    vuln_chunks = 0  
+    vuln_freelistchunks = 0 
+    vuln_lookasidelistchunks = 0
     for knowledge in imm.listKnowledge():
-                        # match on all the freelist[0] chunks we added earlier 
-        if re.match("FreeList0_chunk_",knowledge):
-            vuln_chunks += freelist0_heuristics(window, knowledge, pheap, imm, "freelist", vuln_chunks)
+        # match on all the freelist[0] chunks we added earlier 
+        #window.Log(knowledge)
+        if allocator == "BackEnd":
+            if re.match("FreeList0_chunk_",knowledge):
+                vuln_freelistchunks += freelist_and_lookaside_heuristics(window, knowledge, pheap, imm, "freelist0", vuln_freelistchunks)
+            elif re.match("FreeListn_chunk_",knowledge):
+                vuln_freelistchunks += freelist_and_lookaside_heuristics(window, knowledge, pheap, imm, "freelistn", vuln_freelistchunks)
+        # match on Lookaside
+        elif allocator == "FrontEnd":
+            if re.match("Lookasiden_chunk_",knowledge):
+                vuln_lookasidelistchunks += freelist_and_lookaside_heuristics(window, knowledge, pheap, imm, "lookaside", vuln_lookasidelistchunks)
+        # if we have vulnerable chunks... dont keep looping
+        if vuln_lookasidelistchunks >= 1:
+            break
+        
+        #elif re.match("FreeListn_chunk_",knowledge):
+            
     window.Log("")
-    if vuln_chunks > 0:
+    if vuln_freelistchunks > 0:
         window.Log("")
         window.Log("Information regarding FreeList[0] attacks")
         window.Log("=" * 41)
@@ -1277,8 +1413,11 @@ def perform_heuristics(window, imm, pheap):
         window.Log(" - blink of fake chunk will be heapbase+0x580, thus overwriting heapbase+0x688 with the relink chunk address")                        
         window.Log("")
         window.Log("(!) Heuristics check completed")
-    elif vuln_chunks <= 0:
-        window.Log("(!) No vulnerable checks were identified")     
+    
+    elif allocator == "BackEnd" and vuln_freelistchunks <= 0:
+        window.Log("(!) No vulnerable cases were identified")
+    elif allocator == "FrontEnd" and vuln_lookasidelistchunks <= 0:
+        window.Log("(!) No vulnerable cases were identified")  
                                    
 # for <= XP only
 def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="freelist_graph"):
@@ -1658,7 +1797,7 @@ def analyse_heap(heap, imm, window):
                     
         # libheap does not have some members, so we are on our own
         ProcessHeapsListIndex = imm.readMemory(heap+0x30, 2)
-        (ProcessHeapsListIndex) = struct.unpack("H", ProcessHeapsListIndex)
+        ProcessHeapsListIndex = struct.unpack("H", ProcessHeapsListIndex)[0]
                     
         window.Log("+0x030 ProcessHeapsListIndex          : 0x%08x" % ProcessHeapsListIndex, ProcessHeapsListIndex)
         window.Log("+0x032 HeaderValidateLength           : 0x%08x" % pheap.HeaderValidateLength, pheap.HeaderValidateLength)
@@ -1698,19 +1837,14 @@ def analyse_heap(heap, imm, window):
         FrontEndHeap = imm.readMemory(heap+0x580, 4)
         FrontEndHeap = struct.unpack("L", FrontEndHeap)[0]
         
-        #FrontEndHeap = reverse(FrontEndHeap)
-        #FrontEndHeap = int(binascii.hexlify(FrontEndHeap),16)
-                    
         FrontHeapLockCount = imm.readMemory(heap+0x584, 2)
         FrontHeapLockCount = struct.unpack("H", FrontHeapLockCount)[0]
                     
         FrontEndHeapType = imm.readMemory(heap+0x586, 1)
-        FrontEndHeapType = reverse(FrontEndHeapType)
-        FrontEndHeapType = int(binascii.hexlify(FrontEndHeapType),16)
+        FrontEndHeapType = struct.unpack("B", FrontEndHeapType)[0]
                     
         LastSegmentIndex = imm.readMemory(heap+0x587, 1)
-        LastSegmentIndex = reverse(LastSegmentIndex)
-        LastSegmentIndex = int(binascii.hexlify(LastSegmentIndex),16)
+        LastSegmentIndex = struct.unpack("B", LastSegmentIndex)[0]
                     
         window.Log("+0x580 FrontEndHeap                   : 0x%08x" % FrontEndHeap, FrontEndHeap)
         window.Log("+0x584 FrontHeapLockCount             : 0x%08x" % FrontHeapLockCount, FrontHeapLockCount)
@@ -1729,6 +1863,7 @@ def main(args):
     
     if len(args) > 1:
         cmds = set_up_usage()
+        
         # show the user how to do things
         # ==============================
         if args[0].lower().strip() == "help":
@@ -1874,9 +2009,6 @@ def main(args):
                         
                     dump_FreeListInUse(pheap, window)
                     
-                    # TODO: finish heuristics
-                    perform_heuristics(window, imm, pheap) 
-                    
                     # HeapCache
                     if pheap.HeapCache:
                         window.Log("")
@@ -1928,10 +2060,12 @@ def main(args):
                     window.Log("Invalid heap address!")
                     return "Invalid heap address!"
                 if "-f" in args:
-                    window.Log("(+) FrontEnd is still being developed")
+                    set_Lookaside_chunks(imm, pheap, heap)
+                    #TODO: lookaside validation
+                    perform_heuristics(window, imm, pheap, "FrontEnd")
                 elif "-b" in args:
                     set_FreeList_chunks(imm, pheap, heap)
-                    perform_heuristics(window, imm, pheap)
+                    perform_heuristics(window, imm, pheap, "BackEnd")
                 else:
                     window.Log("")
                     window.Log("(-) Please provide the correct arguments. Run !heaper help <command> for help")           
@@ -2089,6 +2223,7 @@ def main(args):
 
                 
                 if len(args) > 2:
+                    # !heaper command <heap> -h <func>
                     if (args[2].lower().strip() == "-h" or args[2].lower().strip() == "-u"):
                         FilterHeap = True
                         try:
@@ -2112,8 +2247,9 @@ def main(args):
                                 DeleteCSFlag = True
                                 setuefFlag = True 
                                 setVAllocFlag = True
-                                setVFreeFlag = True                                                         
-                                        
+                                setVFreeFlag = True  
+                                                                                       
+                    # !heaper command -h <func>                    
                     elif (args[1].lower().strip() == "-h" or args[1].lower().strip() == "-u"):
                         # just set it on the default heap if the user fails
                         # to supply a heap address
@@ -2161,12 +2297,9 @@ def main(args):
                                     setuefFlag = True 
                                     setVAllocFlag = True
                                     setVFreeFlag = True
-                            
                         else:
                             window.Log("(-) Please include a valid heap for this hook!")
                             return "(-) Please include a valid heap for this hook!"
-
-                                                    
                     else:
                         window.Log("%d" % len(args))
                         window.Log("(-) Please specify a function to hook/unhook using -h/-u")
