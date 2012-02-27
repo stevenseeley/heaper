@@ -36,7 +36,16 @@ import immlib
 from immlib import LogBpHook
 import immutils
 import libdatatype
-import pydot
+try:
+    import pydot
+except:
+    pydot = False
+    
+try:
+    import git
+except:
+    gitpy = False
+    
 import struct
 import re
 
@@ -50,7 +59,7 @@ available_commands = ["dumppeb", "dp", "dumpheaps", "dh", "analyseheap", "ah", "
                       "analyselal", "al", "analysefreelist", "af", "analysechunks", "ac", 
                       "dumpfunctionpointers", "dfp", "help", "-h", "analysesegments", "as", "-f", 
                       "-m", "-p", "freelistinuse", "fliu", "hook", "analyseheapcache", "ahc", "h",
-                      "exploit","exp"]
+                      "exploit","exp","u","update"]
 
 # 8 byte block
 # ============
@@ -595,8 +604,7 @@ def set_up_usage():
     cmds["exp"] = set_command("exploit", "Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions",get_extended_usage()["exploit"], "exp")    
     return cmds
 
-# TODO: build heuristics to detect exploitable paths...
-# FreeList[n] to go (bitmap flip)
+# detects exploitable conditions..
 def freelist_and_lookaside_heuristics(window, chunk_data, pheap, imm, data_structure, vuln_chunks):
 
     # check for FreeList
@@ -613,21 +621,15 @@ def freelist_and_lookaside_heuristics(window, chunk_data, pheap, imm, data_struc
         flink = corrupt_chunk_data[5]
         # ensure that we are dealing with FreeList[0]
         if corrupt_chunk_size == 0:
-        # search all the chunks
+            # search all the chunks
             for index, chunk in enumerate(pheap.chunks):
                 # compare chunk addresses and if the sizes are the same, 
                 # i suspect at least a 4 byte overwrite..
                 if (corrupt_chunk_address-0x8) == chunk.addr:
-                    
-                    if ((pheap.chunks[index-1].size != chunk.psize) 
-                        and (pheap.chunks[index+1].psize != chunk.size
-                        and pheap.chunks[index-1].size != chunk.psize)):
-                        window.Log("buggy")
-                    
                     # if its the last chunk in the freelist[0] we can only check if we modify past
                     # 2 bytes, else we just have to check the 1st byte!
                     # this check can be inhanced further for freelist[n]
-                    elif ((flink == 1 and pheap.chunks[index-1].size != chunk.psize) 
+                    if ((flink == 1 and pheap.chunks[index-1].size != chunk.psize) 
                         or (flink != 1 and pheap.chunks[index+1].psize != chunk.size
                         and pheap.chunks[index-1].size != chunk.psize)):
                         
@@ -722,10 +724,31 @@ def freelist_and_lookaside_heuristics(window, chunk_data, pheap, imm, data_struc
                                 window.Log(" -> This chunk is number %d in FreeList[0]" % index)                 
                             window.Log("")
                             window.Log("(!) This chunk was overwritten with a size value (0x%04x) that is outside of the range of FreeList[0]" % chunk.size)
+        
+        elif corrupt_chunk_size != 0:
+            for index, chunk in enumerate(pheap.chunks):
+                if (corrupt_chunk_address-0x8) == chunk.addr:
+                    # check on size only incase of an off by one
+                    if (corrupt_chunk_size != chunk.size):
+
+                        vuln_chunks += 1
+                        window.Log("(!) Detected FreeList[0x%x] chunk (0x%08x) overwrite!" % (corrupt_chunk_size,chunk.addr), chunk.addr)
+                        if chunk.size < 0x80:
+                            window.Log("(+) Chunk is set to size 0x%04x so next allocation of size 0x%04x" % (chunk.size,pheap.chunks[index-1].size),chunk.addr)
+                            window.Log("    will flip the FreeListInUse[0x%04x] entry" % (chunk.size),chunk.addr)
+
+                        else:
+                            window.Log("(+) Chunk is set to size 0x%04x, try setting it < 0x80" % (chunk.size))
+                        
+                        
+                        if ((pheap.chunks[index-1].nextchunk == 0) and (pheap.chunks[index+1].prevchunk == 0)):
+                            window.Log("(+) Detected the chunk to be lonely!",chunk.addr)
+                        else:
+                            window.Log("(-) This chunk is not lonely :( try overwriting blink and flink")                        
+                        
         # remove the obj for next run
         imm.forgetKnowledge(chunk_data)
         return vuln_chunks
-
 
     elif data_structure == "lookaside":
         if pheap.Lookaside:
@@ -1109,8 +1132,7 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
         window.Log("(-) Lookaside not in use..")
 
 
-# I do not use the offset to the bitmap because
-# I dont need to over complicate this..
+# yes this is technically cheating, but much more realistic
 def get_heapCache_bitmap(pheap, get_chunk_dict=False):
     bit_list = {}
     chunk_dict = {}
@@ -1217,8 +1239,6 @@ def dump_HeapCache_struc(pheap, window):
     window.Log("+0x060 pBitmap               : 0x00%14x" % pheap.HeapCache.pBitmap, pheap.HeapCache.pBitmap)
                         
 # dump the HeapCache
-# TODO: graph this structure
-# validation is already done when iterating over FreeList[0] (i need to double check this though)
 def dump_HeapCache(pheap,window,imm):
     for a in range(0, pheap.HeapCache.NumBuckets):
         if pheap.HeapCache.Buckets[a]:
@@ -1360,6 +1380,7 @@ def perform_heuristics(window, imm, pheap, allocator):
     window.Log("")
     vuln_freelistchunks = 0 
     vuln_lookasidelistchunks = 0
+    vuln_freelistnchunks = 0
     for knowledge in imm.listKnowledge():
         # match on all the freelist[0] chunks we added earlier 
         #window.Log(knowledge)
@@ -1367,7 +1388,7 @@ def perform_heuristics(window, imm, pheap, allocator):
             if re.match("FreeList0_chunk_",knowledge):
                 vuln_freelistchunks += freelist_and_lookaside_heuristics(window, knowledge, pheap, imm, "freelist0", vuln_freelistchunks)
             elif re.match("FreeListn_chunk_",knowledge):
-                vuln_freelistchunks += freelist_and_lookaside_heuristics(window, knowledge, pheap, imm, "freelistn", vuln_freelistchunks)
+                vuln_freelistnchunks += freelist_and_lookaside_heuristics(window, knowledge, pheap, imm, "freelistn", vuln_freelistchunks)
         # match on Lookaside
         elif allocator == "FrontEnd":
             if re.match("Lookasiden_chunk_",knowledge):
@@ -1415,9 +1436,11 @@ def perform_heuristics(window, imm, pheap, allocator):
         window.Log("(!) Heuristics check completed")
     
     elif allocator == "BackEnd" and vuln_freelistchunks <= 0:
-        window.Log("(!) No vulnerable cases were identified")
+        window.Log("(!) No exploitable cases were identified for FreeList[0]")
     elif allocator == "FrontEnd" and vuln_lookasidelistchunks <= 0:
-        window.Log("(!) No vulnerable cases were identified")  
+        window.Log("(!) No vulnerable cases were identified")
+    elif allocator == "BackEnd" and vuln_freelistnchunks <= 0:
+        window.Log("(!) No exploitable cases were identified for FreeList[n]")
                                    
 # for <= XP only
 def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="freelist_graph"):
@@ -1632,9 +1655,6 @@ def dumpchunk_info(chunk, show_detail, window):
                 window.Log("        -> hex: \\x%s" % dump[a][0].rstrip().replace(" ", "\\x")) 
                 window.Log("        -> ascii: %s" % (dump[a][1]))
 
-# TODO: detect where the function pointer was called from
-# may require a new function.
-
 def dump_function_pointers(window, imm, writable_segment, patch=False, restore=False, address_to_patch=False):
     j = 0
     g = 0
@@ -1694,7 +1714,6 @@ def dump_function_pointers(window, imm, writable_segment, patch=False, restore=F
         
     return "(+) Dumped all IAT pointers from %s" % imm.getDebuggedName()    
 
-# TODO: tidy up with struct (shorten/optimize the code)
 def dump_segment_structure(pheap, window, imm, heap):
     """
     allows the user to dump the segment structure(s) from a heap
@@ -1875,6 +1894,7 @@ def main(args):
             else:
                 usage(imm)
                 return "(-) Invalid command specified!"
+
     
     if len(args) >= 1:
         if not opennewwindow:            
@@ -1901,7 +1921,9 @@ def main(args):
                 return dump_teb(imm,window)
             elif args[0].lower().strip() == "help" or args[0].lower().strip() == "-h":
                 return usage(imm)
-            
+            # TODO: finish update... 
+            elif args[0].lower().strip() == "update" or args[0].lower().strip() == "u":
+                window.Log("(!) Updating...")            
             # dump function pointers from the parent processes .data segment
             elif args[0].lower().strip() == "dumpfunctionpointers" or args[0].lower().strip() == "dfp":
                 writable_segment = 0x00000000
@@ -1940,6 +1962,10 @@ def main(args):
                         
             # check if we are graphing, if so, do we have a custom filename?
             if "-g" in args:
+                if not pydot:
+                    window.Log("(-) Please ensure pydot, pyparser and graphviz are installed")
+                    window.Log("    when using the graphing functionaility.")
+                    return "(-) Please ensure pydot, pyparser and graphviz are installed!"
                 graphic_structure = True
                 if "-f" in args:
                     try:
@@ -2061,7 +2087,6 @@ def main(args):
                     return "Invalid heap address!"
                 if "-f" in args:
                     set_Lookaside_chunks(imm, pheap, heap)
-                    #TODO: lookaside validation
                     perform_heuristics(window, imm, pheap, "FrontEnd")
                 elif "-b" in args:
                     set_FreeList_chunks(imm, pheap, heap)
