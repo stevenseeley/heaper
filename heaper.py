@@ -1938,23 +1938,12 @@ def main(args):
                     return "(-) Please check your internet connection"
                 
                 window.Log("")
-                test = open(inspect.getfile(inspect.currentframe()),"r")
-                current_build = test.read()
+                f = open(inspect.getfile(inspect.currentframe()),"r")
+                current_build = f.read()
                 current_build2 = current_build.split("\r")
-                test.close()
-                window.Log(githash("".join(latest_build2)))
-                window.Log(githash("".join(current_build2)))
+                f.close()
                 
-                file1 = open("C://test.py","w")
-                file1.write(latest_build)
-                file1.close()
-                
-                file2 = open("C://test1.py","w")
-                file2.write(current_build)
-                file2.close()
-                                
-                """
-                if githash(latest_build) != githash(current_build):
+                if githash("".join(latest_build2)) != githash("".join(current_build2)):
                     window.Log(githash(latest_build))
                     window.Log(githash(current_build))
                     window.Log("(!) Detected older version...")
@@ -1968,7 +1957,7 @@ def main(args):
                 else:
                     window.Log("(+) This version is the latest version...")
                     return "(!) This version is the latest version..."
-                """    
+  
             # dump function pointers from the parent processes .data segment
             elif args[0].lower().strip() == "dumpfunctionpointers" or args[0].lower().strip() == "dfp":
                 writable_segment = 0x00000000
