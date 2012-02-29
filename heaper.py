@@ -1944,11 +1944,11 @@ def main(args):
                 window.Log(githash(latest_build))
                 window.Log(githash(current_build))
                 
-                file1 = open("c:\test.py","w")
+                file1 = open("C://test.py","w")
                 file1.write(latest_build)
                 file1.close()
                 
-                file2 = open("c:\test1.py","w")
+                file2 = open("C://test1.py","w")
                 file2.write(current_build)
                 file2.close()
                                 
