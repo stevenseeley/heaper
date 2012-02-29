@@ -1943,8 +1943,8 @@ def main(args):
                 f.close()
                 
                 if githash("".join(latest_build2)) != githash("".join(current_build2)):
-                    window.Log(githash(latest_build))
-                    window.Log(githash(current_build))
+                    window.Log(githash("".join(latest_build2)))
+                    window.Log(githash("".join(current_build2)))
                     window.Log("(!) Detected older version...")
                     window.Log("(!) Updating...")
                     write_new_file = open(inspect.getfile(inspect.currentframe()),'w')
