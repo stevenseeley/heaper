@@ -1941,7 +1941,18 @@ def main(args):
                 current_build = test.read()
                 current_build2 = current_build.split("\r")
                 test.close()
-
+                window.Log(githash(latest_build))
+                window.Log(githash(current_build))
+                
+                file1 = open("c:\test.py","w")
+                file1.write(latest_build)
+                file1.close()
+                
+                file2 = open("c:\test1.py","w")
+                file2.write(current_build)
+                file2.close()
+                                
+                """
                 if githash(latest_build) != githash(current_build):
                     window.Log(githash(latest_build))
                     window.Log(githash(current_build))
@@ -1956,7 +1967,7 @@ def main(args):
                 else:
                     window.Log("(+) This version is the latest version...")
                     return "(!) This version is the latest version..."
-                    
+                """    
             # dump function pointers from the parent processes .data segment
             elif args[0].lower().strip() == "dumpfunctionpointers" or args[0].lower().strip() == "dfp":
                 writable_segment = 0x00000000
