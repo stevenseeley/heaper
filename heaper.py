@@ -1942,7 +1942,9 @@ def main(args):
                 current_build2 = current_build.split("\r")
                 test.close()
 
-                if latest_build != current_build:
+                if githash(latest_build) != githash(current_build):
+                    window.Log(githash(latest_build))
+                    window.Log(githash(current_build))
                     window.Log("(!) Detected older version...")
                     window.Log("(!) Updating...")
                     write_new_file = open(inspect.getfile(inspect.currentframe()),'w')
