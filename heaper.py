@@ -1947,7 +1947,7 @@ def main(args):
                     window.Log(githash("".join(current_build2)))
                     window.Log("(!) Detected older version...")
                     window.Log("(!) Updating...")
-                    write_new_file = open(inspect.getfile(inspect.currentframe()),'w')
+                    write_new_file = open(inspect.getfile(inspect.currentframe()),'r+')
                     for lines in current_build2:
                         write_new_file.write(lines)
                     write_new_file.close()
