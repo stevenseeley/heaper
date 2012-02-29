@@ -1924,7 +1924,7 @@ def main(args):
                 return dump_teb(imm,window)
             elif args[0].lower().strip() == "help" or args[0].lower().strip() == "-h":
                 return usage(imm)
-            # update functionaility
+            # update functionality
             elif args[0].lower().strip() == "update" or args[0].lower().strip() == "u":
                 
                 try:
@@ -2018,6 +2018,8 @@ def main(args):
             
             # analyse the lookaside list
             # ==========================
+            # TODO: change to analyse front end
+            # runtime to detect if we are using LFH or lookaside
             elif args[0].lower().strip() == "analyselal" or args[0].lower().strip() == "al":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -2039,6 +2041,8 @@ def main(args):
             
             # analyse freelists
             # =================
+            # TODO: change to analyse back end
+            # runtime to detect the ListHint or FreeList
             elif args[0].lower().strip() == "analysefreelist" or args[0].lower().strip() == "af":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -2110,6 +2114,7 @@ def main(args):
                                                
             # perform hueristics
             # ==================
+            # TODO: hueristics additions for LFH
             elif args[0].lower().strip() == "exploit" or args[0].lower().strip() == "exp":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -2129,6 +2134,7 @@ def main(args):
             
             # analyse FreelistInUse
             # =====================
+            # TODO: change to detect xp or win7
             elif args[0].lower().strip() == "freelistinuse" or args[0].lower().strip() == "fliu":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -2153,6 +2159,7 @@ def main(args):
                 
             # analyse segment chunks
             # ======================
+            # TODO: find out if this still works on win7?
             elif args[0].lower().strip() == "analysechunks" or args[0].lower().strip() == "ac":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
