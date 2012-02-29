@@ -1924,11 +1924,10 @@ def main(args):
                 return dump_teb(imm,window)
             elif args[0].lower().strip() == "help" or args[0].lower().strip() == "-h":
                 return usage(imm)
-            
+            # update functionaility
             elif args[0].lower().strip() == "update" or args[0].lower().strip() == "u":
                 
                 try:
-                    
                     f = urllib2.urlopen("https://raw.github.com/mrmee/heaper/master/heaper.py")
                     latest_build = f.read()
                     latest_build2 = latest_build.split("\r")
