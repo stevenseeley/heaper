@@ -40,15 +40,11 @@ try:
     import pydot
 except:
     pydot = False
-    
-try:
-    import git
-except:
-    gitpy = False
-    
 import struct
 import re
-
+from hashlib import sha1
+import urllib2
+import inspect
 
 # GLOBAL VARIABLES
 # ================
@@ -222,6 +218,12 @@ def chr_to_hex(n):
 # just incase we will need this
 def reverse(text):
     return ''.join([text[i] for i in range(len(text)-1,-1,-1)])
+
+def githash(data):
+    s = sha1()
+    s.update("blob %u\0" % len(data))
+    s.update(data)
+    return s.hexdigest()
 
 class set_command:
     """
@@ -489,6 +491,7 @@ def usage(imm):
     imm.log("analyseheapcache <heap> / ahc <heap>  : analyse a particular heap's cache (FreeList[0])")
     imm.log("freelistinuse <heap> / fliu <heap>    : analyse/patch the FreeListInUse structure")
     imm.log("hook <heap> / h -h <func>             : Hook various functions that create/destroy/manipulate a heap")
+    imm.log("update / u                            : Update to the latest version")
     imm.log("exploit <heap> / exp <heap>           : Perform heuristics against the FrontEnd and BackEnd allocators")
     imm.log("                                        to determine exploitable conditions")
     imm.log("")
@@ -1921,9 +1924,37 @@ def main(args):
                 return dump_teb(imm,window)
             elif args[0].lower().strip() == "help" or args[0].lower().strip() == "-h":
                 return usage(imm)
-            # TODO: finish update... 
+            
             elif args[0].lower().strip() == "update" or args[0].lower().strip() == "u":
-                window.Log("(!) Updating...")            
+                
+                try:
+                    
+                    f = urllib2.urlopen("https://raw.github.com/mrmee/heaper/master/heaper.py")
+                    latest_build = f.read()
+                    f.close()
+                except:
+                    window.Log("(-) Please check your internet connection")
+                    return "(-) Please check your internet connection"
+                
+                window.Log("")
+                test = open(inspect.getfile(inspect.currentframe()),"r")
+                current_build = test.read()
+                current_build2 = current_build.split("\r")
+                test.close()
+
+                if latest_build != current_build:
+                    window.Log("(!) Detected older version...")
+                    window.Log("(!) Updating...")
+                    write_new_file = open(inspect.getfile(inspect.currentframe()),'w')
+                    for lines in current_build2:
+                        write_new_file.write(lines)
+                    write_new_file.close()
+                    window.Log("(!) Update complete!")
+                    return "(!) Update complete!" 
+                else:
+                    window.Log("(+) This version is the latest version...")
+                    return "(!) This version is the latest version..."
+                    
             # dump function pointers from the parent processes .data segment
             elif args[0].lower().strip() == "dumpfunctionpointers" or args[0].lower().strip() == "dfp":
                 writable_segment = 0x00000000
