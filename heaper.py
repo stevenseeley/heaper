@@ -1942,8 +1942,8 @@ def main(args):
                 current_build = test.read()
                 current_build2 = current_build.split("\r")
                 test.close()
-                window.Log(githash(latest_build2))
-                window.Log(githash(current_build))
+                window.Log(githash("".join(latest_build2)))
+                window.Log(githash("".join(current_build2)))
                 
                 file1 = open("C://test.py","w")
                 file1.write(latest_build)
