@@ -1931,6 +1931,7 @@ def main(args):
                     
                     f = urllib2.urlopen("https://raw.github.com/mrmee/heaper/master/heaper.py")
                     latest_build = f.read()
+                    latest_build2 = latest_build.split("\r")
                     f.close()
                 except:
                     window.Log("(-) Please check your internet connection")
@@ -1941,7 +1942,7 @@ def main(args):
                 current_build = test.read()
                 current_build2 = current_build.split("\r")
                 test.close()
-                window.Log(githash(latest_build))
+                window.Log(githash(latest_build2))
                 window.Log(githash(current_build))
                 
                 file1 = open("C://test.py","w")
