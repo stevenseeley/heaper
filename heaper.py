@@ -1491,8 +1491,20 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
             bin_entry = a + block.BaseIndex
 
             freelist_addr = block.ListHints + (bin_entry - block.BaseIndex) * 8
+            
+            allocations = heap_bucket & 0x0000FFFF
+            allocations = allocations / 2
+                # if we have had a allocation, then there should only be 17 to go
+            if allocations > 0:
+                lfhthreshold = 0x11
+            else:
+                lfhthreshold = 0x12
+            amount_needed = lfhthreshold - allocations
+            #allocations_needed[bin_entry] = amount_needed
+
 
             if heap_bucket != 0:
+                """
                 allocations = heap_bucket & 0x0000FFFF
                 allocations = allocations / 2
                 # if we have had a allocation, then there should only be 17 to go
@@ -1501,20 +1513,32 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
                 else:
                     lfhthreshold = 0x12
                 amount_needed = lfhthreshold - allocations
-                allocations_needed[bin_entry] = amount_needed
+                """
+                if amount_needed in range (0x01,0x12):
+                    allocations_needed[bin_entry] = amount_needed
+                else:
+                    allocations_needed[bin_entry] = 0 
                 if heap_bucket & 1:
                     window.Log("Bin[0x%04x] | Flink => 0x%08x :: Enabled | Bucket => 0x%08x" % (bin_entry, flink, heap_bucket - 1), address = freelist_addr)
                 elif (heap_bucket & 0x0000FFFF) >= 0x22: #there appears to be a case where the LFH isn't activated when it should be...
                     window.Log("Bin[0x%04x] | Flink => 0x%08x :: ??????? | Bucket => 0x%08x" % (bin_entry, flink, heap_bucket), address = freelist_addr)
+                    #window.Log("????: %d" % amount_needed)
                 else:
-                    #allocations_needed[bin_entry] = amount_needed
                     window.Log("Bin[0x%04x] | Flink => 0x%08x :: Has had %d allocations | Needs %d more" % (bin_entry, flink, allocations, amount_needed), address = freelist_addr)
-            else:
-                if emptybins and heap_bucket == 0 and bin_entry != 0x1 and bin_entry != 0x0:
-                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: Bin is Emtpy!" % (bin_entry, flink), address = freelist_addr)
+            elif heap_bucket == 0:
+
+                    
+                if emptybins and heap_bucket == 0 and bin_entry != 0x1 and bin_entry != 0x0 and flink == 0:
+                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: Bin is Empty!" % (bin_entry, flink), address = freelist_addr)
                 elif heap_bucket == 0 and bin_entry != 0x1 and bin_entry != 0x0 and bin_entry == (block.ArraySize-0x1) and flink != 0:
                     window.Log("Bin[0x%04x] | Flink => 0x%08x :: last entry contains large chunks!" % (bin_entry, flink), address = freelist_addr)
+                elif heap_bucket == 0 and flink != 0 and bin_entry != 0x1 and bin_entry != 0x0:
+                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: Free chunks available (unknown allocations)" % (bin_entry, flink), address = freelist_addr)
+                    allocations_needed[bin_entry] = 0
+                                # amount needed should always be between 0-18
+                if amount_needed in range (0x01,0x12):
                     allocations_needed[bin_entry] = amount_needed
+                    
             if flink != 0:
                 window.Log("    -> Bin contains chunks")
                             
@@ -1531,13 +1555,19 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
                     nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
                 window.Log("Bin[0x%04x]    0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (a, e[0], e[1], e[2]), address = e[0])
                 for e in entry[1:]:
+                    chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a)
                     window.Log("               0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (e[0], e[1], e[2]), address= e[0])    
                     if graphic_structure:
                         nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
             
             if graphic_structure:
                 list_hint_dict[a] = nodes
-                if a in allocations_needed:
+                # no matter how many allocations, you will never trigger LFH
+                if a == 127:
+                    list_data = "ListHint[0x%x]\nNo amount of allocations will\ntrigger LFH for this bin" % (a) 
+                elif a in allocations_needed and allocations_needed[a] == 0:
+                    list_data = "ListHint[0x%x]\nNo. of allocations to LFH is unknown" % (a)
+                elif a in allocations_needed:
                     list_data = "ListHint[0x%x]\nNo. of allocations to LFH: %d" % (a,allocations_needed[a])
                 else:
                     list_data = "ListHint[0x%x]" % (a)
@@ -1561,12 +1591,13 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
                         if ((chunk_nodes.index(i)-1) >= 0):
                             prev_nodes_to_link = list_hint_dict[chunk_nodes[chunk_nodes.index(i)-1]]
                             # check the previous node to see if there is an edge, if not, add it
-                            if not listhintgraph.get_edge(prev_nodes_to_link[0],node) and nodes_to_add.index(node) == 0:
-                                listhintgraph.add_edge(pydot.Edge(prev_nodes_to_link[0],node))
+                            if not listhintgraph.get_edge(prev_nodes_to_link[-1],node) and nodes_to_add.index(node) == 0:
+                                listhintgraph.add_edge(pydot.Edge(prev_nodes_to_link[-1],node))
                         j+=1
                 i+=1
-        listhintgraph.set_graphviz_executables(paths)
-        listhintgraph.write_png(filename+".png")
+        if graphic_structure:
+            listhintgraph.set_graphviz_executables(paths)
+            listhintgraph.write_png(filename+".png")
         
 def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="freelist_graph"):
     if graphic_structure:
@@ -2215,6 +2246,8 @@ def main(args):
                             dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure, filename)
                         else:
                             dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure)
+                    else:
+                        dump_ListHint_and_freelist(pheap, window, heap, imm)
                     
 
             # analyse heap cache if it exists
