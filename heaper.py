@@ -52,11 +52,16 @@ import inspect
 # all available functions
 # ========================
 available_commands = ["dumppeb", "dp", "dumpheaps", "dh", "analyseheap", "ah", "dumpteb", "dt", 
-                      "analyselal", "al", "analysefreelist", "af", "analysechunks", "ac", 
+                      "analysefrontend", "af", "analysebackend", "ab", "analysechunks", "ac", 
                       "dumpfunctionpointers", "dfp", "help", "-h", "analysesegments", "as", "-f", 
                       "-m", "-p", "freelistinuse", "fliu", "hook", "analyseheapcache", "ahc", "h",
                       "exploit","exp","u","update"]
 
+# graphiz engine needs this under windows 7
+paths = {"dot":"C:\\Program Files\\Graphviz 2.28\\bin\\dot.exe","twopi":"C:\\Program Files\\Graphviz 2.28\\bin\\twopi.exe",
+        "neato":"C:\\Program Files\\Graphviz 2.28\\bin\\neato.exe","circo":"C:\\Program Files\\Graphviz 2.28\\bin\\circo.exe",
+        "fdp":"C:\\Program Files\\Graphviz 2.28\\bin\\fdp.exe"}
+    
 # 8 byte block
 # ============
 block = 8
@@ -71,6 +76,12 @@ graphic_structure = False
 
 # lookaside heuristic flag
 lookaside_corrupt = False
+
+# heap restore
+restore = False
+
+# emptybins flag
+emptybins = False
 
 # hook tags
 # =========
@@ -218,6 +229,10 @@ def chr_to_hex(n):
 # just incase we will need this
 def reverse(text):
     return ''.join([text[i] for i in range(len(text)-1,-1,-1)])
+
+def find_key(dic, val):
+    """return the key of dictionary dic given the value"""
+    return [k for k, v in dic.iteritems() if v == val][0]
 
 def githash(data):
     s = sha1()
@@ -484,8 +499,8 @@ def usage(imm):
     imm.log("dumpheaps / dh                        : dump the heaps")
     imm.log("dumpfunctionpointers / dfp            : dump all the processes function pointers")
     imm.log("analyseheap <heap> / ah <heap>        : analyse a particular heap")
-    imm.log("analyselal <heap> / al <heap>         : analyse a particular heap's Lookaside list")
-    imm.log("analysefreelist <heap> / af <heap>    : analyse a particular heap's freelist")
+    imm.log("analysefrontend <heap> / af <heap>    : analyse a particular heap's frontend data structure")
+    imm.log("analysebackend <heap> / ab <heap>     : analyse a particular heap's backend data structure")
     imm.log("analysesegments <heap> / as <heap>    : analyse a particular heap's segments")
     imm.log("analysechunks <heap> / ac <heap>      : analyse a particular heap's chunks")
     imm.log("analyseheapcache <heap> / ahc <heap>  : analyse a particular heap's cache (FreeList[0])")
@@ -572,9 +587,6 @@ def get_extended_usage():
     extusage["exploit"] += "Use -f to analyse the FrontEnd allocator\n"
     extusage["exploit"] += "Use -b to analyse the BackEnd allocator\n"
     extusage["exploit"] += "eg: !heaper exploit 00490000 -f\n"
-        
-    
-    
     return extusage
     
 def set_up_usage():
@@ -1273,7 +1285,7 @@ def get_heap_instance(heap, imm):
     except:
         return "(-) Invalid heap address"
     try:
-        pheap = imm.getHeap( heap )
+        pheap = imm.getHeap( heap, restore )
     except:
         return "(-) Invalid heap address"
     return pheap, heap
@@ -1445,7 +1457,117 @@ def perform_heuristics(window, imm, pheap, allocator):
     elif allocator == "BackEnd" and vuln_freelistnchunks <= 0:
         window.Log("(!) No exploitable cases were identified for FreeList[n]")
                                    
-# for <= XP only
+
+def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False, filename="listhint_graph"):
+    if graphic_structure:
+        listhintgraph = pydot.Dot(graph_type='digraph')
+        listhintgraph.set("ranksep", "0.75")
+        ListHint_nodes = []
+        list_hint_dict = {}
+
+    for i in range(0, len(pheap.blocks)):
+
+        block = pheap.blocks[i]
+        num_of_freelists = block.ArraySize - block.BaseIndex
+        window.Log("")
+        window.Log("HeapBase->BlocksIndex")
+        window.Log("~~~~~~~~~~~~~~~~~~~~~")
+        window.Log("(+) BlocksIndex information for 0x%08x->0x%08x" % (heap+0xb8,block.address),block.address)
+        window.Log("(+) ExtendedLookup => 0x%08x" % block.ExtendedLookup)
+        window.Log("(+) ArraySize [max permitted in blocks] => 0x%08x" % block.ArraySize)
+        window.Log("(+) BaseIndex => 0x%08x" % block.BaseIndex)
+        window.Log("(+) End Block information for 0x%08x" % block.address)
+        window.Log("(+) Block has [0x%x] FreeLists starting at 0x%08x"  % (num_of_freelists, block.ListHints))
+        window.Log("")
+        window.Log("(+) ListHints:")
+        window.Log("-------------")
+        memory = imm.readMemory( block.ListHints, num_of_freelists * 8 )
+        allocations_needed = {}
+                     
+        for a in range(0, num_of_freelists):
+            # Previous and Next Chunk of the head of the double linked list
+            (flink, heap_bucket) = struct.unpack("LL", memory[a * 0x8 : a * 0x8 + 0x8] )
+
+            bin_entry = a + block.BaseIndex
+
+            freelist_addr = block.ListHints + (bin_entry - block.BaseIndex) * 8
+
+            if heap_bucket != 0:
+                allocations = heap_bucket & 0x0000FFFF
+                allocations = allocations / 2
+                # if we have had a allocation, then there should only be 17 to go
+                if allocations > 0:
+                    lfhthreshold = 0x11
+                else:
+                    lfhthreshold = 0x12
+                amount_needed = lfhthreshold - allocations
+                allocations_needed[bin_entry] = amount_needed
+                if heap_bucket & 1:
+                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: Enabled | Bucket => 0x%08x" % (bin_entry, flink, heap_bucket - 1), address = freelist_addr)
+                elif (heap_bucket & 0x0000FFFF) >= 0x22: #there appears to be a case where the LFH isn't activated when it should be...
+                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: ??????? | Bucket => 0x%08x" % (bin_entry, flink, heap_bucket), address = freelist_addr)
+                else:
+                    #allocations_needed[bin_entry] = amount_needed
+                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: Has had %d allocations | Needs %d more" % (bin_entry, flink, allocations, amount_needed), address = freelist_addr)
+            else:
+                if emptybins and heap_bucket == 0 and bin_entry != 0x1 and bin_entry != 0x0:
+                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: Bin is Emtpy!" % (bin_entry, flink), address = freelist_addr)
+                elif heap_bucket == 0 and bin_entry != 0x1 and bin_entry != 0x0 and bin_entry == (block.ArraySize-0x1) and flink != 0:
+                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: last entry contains large chunks!" % (bin_entry, flink), address = freelist_addr)
+                    allocations_needed[bin_entry] = amount_needed
+            if flink != 0:
+                window.Log("    -> Bin contains chunks")
+                            
+        window.Log("")
+        window.Log("(+) FreeList:")
+        window.Log("-------------")
+        for a in range(0, num_of_freelists):
+            entry= block.FreeList[a]
+            e=entry[0]
+            nodes = []
+            if e[0]:
+                chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a)
+                if graphic_structure:
+                    nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
+                window.Log("Bin[0x%04x]    0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (a, e[0], e[1], e[2]), address = e[0])
+                for e in entry[1:]:
+                    window.Log("               0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (e[0], e[1], e[2]), address= e[0])    
+                    if graphic_structure:
+                        nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
+            
+            if graphic_structure:
+                list_hint_dict[a] = nodes
+                if a in allocations_needed:
+                    list_data = "ListHint[0x%x]\nNo. of allocations to LFH: %d" % (a,allocations_needed[a])
+                else:
+                    list_data = "ListHint[0x%x]" % (a)
+                ListHint_nodes.append(pydot.Node("ListHint[0x%x]" % a, style="filled", shape="rectangle", label=list_data, fillcolor="#66FF66"))
+        
+        if graphic_structure:
+            i = 0
+            chunk_nodes = []
+            for hint in ListHint_nodes:
+                nodes_to_add = list_hint_dict[i]
+                if len(nodes_to_add) > 0:
+                    chunk_nodes.append(i)
+                    listhintgraph.add_node(hint)
+                    # link to the first chunk in the Bin
+                    listhintgraph.add_edge(pydot.Edge(hint, nodes_to_add[0]))
+                    j = 0
+                    for node in nodes_to_add:
+                        listhintgraph.add_node(node)
+                        if j+1 <= len(nodes_to_add)-1:
+                            listhintgraph.add_edge(pydot.Edge(node, nodes_to_add[j+1]))
+                        if ((chunk_nodes.index(i)-1) >= 0):
+                            prev_nodes_to_link = list_hint_dict[chunk_nodes[chunk_nodes.index(i)-1]]
+                            # check the previous node to see if there is an edge, if not, add it
+                            if not listhintgraph.get_edge(prev_nodes_to_link[0],node) and nodes_to_add.index(node) == 0:
+                                listhintgraph.add_edge(pydot.Edge(prev_nodes_to_link[0],node))
+                        j+=1
+                i+=1
+        listhintgraph.set_graphviz_executables(paths)
+        listhintgraph.write_png(filename+".png")
+        
 def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="freelist_graph"):
     if graphic_structure:
         freelistgraph = pydot.Dot(graph_type='digraph')
@@ -1897,7 +2019,6 @@ def main(args):
             else:
                 usage(imm)
                 return "(-) Invalid command specified!"
-
     
     if len(args) >= 1:
         if not opennewwindow:            
@@ -2013,13 +2134,17 @@ def main(args):
                     heap = int(heap,16)
                 except:
                     return "Invalid heap address"
-                
-                analyse_heap(heap, imm, window)
-            
+                if imm.getOsVersion() == "xp":
+                    analyse_heap(heap, imm, window)
+                else:
+                    window.Log("TODO: dump the heap structure under win7")
+                    window.Log("also add support to dump _LFH_HEAP and a few other structures")
+                    
             # analyse the lookaside list
             # ==========================
             # TODO: change to analyse front end
             # runtime to detect if we are using LFH or lookaside
+            
             elif args[0].lower().strip() == "analyselal" or args[0].lower().strip() == "al":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -2043,12 +2168,14 @@ def main(args):
             # =================
             # TODO: change to analyse back end
             # runtime to detect the ListHint or FreeList
-            elif args[0].lower().strip() == "analysefreelist" or args[0].lower().strip() == "af":
+            
+            elif args[0].lower().strip() == "analysebackend" or args[0].lower().strip() == "ab":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
                 except:
                     window.Log("Invalid heap address!")
                     return "Invalid heap address!"
+                
                 if imm.getOsVersion() == "xp":
                     
                     if pheap.HeapCache:
@@ -2083,8 +2210,13 @@ def main(args):
 
                 # do vista and windows 7 freelist analyse?
                 else:
-                    window.Log("(-) Freelist analyse not supported under Vista and above")
-            
+                    if graphic_structure:
+                        if custfilename:
+                            dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure, filename)
+                        else:
+                            dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure)
+                    
+
             # analyse heap cache if it exists
             # ===============================
             elif args[0].lower().strip() == "analyseheapcache" or args[0].lower().strip() == "ahc":
