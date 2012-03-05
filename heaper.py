@@ -232,7 +232,11 @@ def reverse(text):
 
 def find_key(dic, val):
     """return the key of dictionary dic given the value"""
-    return [k for k, v in dic.iteritems() if v == val][0]
+    try:
+        ret_value = [k for k, v in dic.iteritems() if v == val][0]
+    except:
+        ret_value = False
+    return ret_value
 
 def githash(data):
     s = sha1()
@@ -1462,9 +1466,11 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
     if graphic_structure:
         listhintgraph = pydot.Dot(graph_type='digraph')
         listhintgraph.set("ranksep", "0.75")
-        ListHint_nodes = []
+        ListHint_nodes = {}
         list_hint_dict = {}
-
+        
+    chunk_nodes = []
+    node_list = []
     for i in range(0, len(pheap.blocks)):
 
         block = pheap.blocks[i]
@@ -1494,26 +1500,14 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
             
             allocations = heap_bucket & 0x0000FFFF
             allocations = allocations / 2
-                # if we have had a allocation, then there should only be 17 to go
+            # if we have had a allocation, then there should only be 17 to go
             if allocations > 0:
                 lfhthreshold = 0x11
             else:
                 lfhthreshold = 0x12
             amount_needed = lfhthreshold - allocations
-            #allocations_needed[bin_entry] = amount_needed
-
 
             if heap_bucket != 0:
-                """
-                allocations = heap_bucket & 0x0000FFFF
-                allocations = allocations / 2
-                # if we have had a allocation, then there should only be 17 to go
-                if allocations > 0:
-                    lfhthreshold = 0x11
-                else:
-                    lfhthreshold = 0x12
-                amount_needed = lfhthreshold - allocations
-                """
                 if amount_needed in range (0x01,0x12):
                     allocations_needed[bin_entry] = amount_needed
                 else:
@@ -1522,20 +1516,18 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
                     window.Log("Bin[0x%04x] | Flink => 0x%08x :: Enabled | Bucket => 0x%08x" % (bin_entry, flink, heap_bucket - 1), address = freelist_addr)
                 elif (heap_bucket & 0x0000FFFF) >= 0x22: #there appears to be a case where the LFH isn't activated when it should be...
                     window.Log("Bin[0x%04x] | Flink => 0x%08x :: ??????? | Bucket => 0x%08x" % (bin_entry, flink, heap_bucket), address = freelist_addr)
-                    #window.Log("????: %d" % amount_needed)
                 else:
                     window.Log("Bin[0x%04x] | Flink => 0x%08x :: Has had %d allocations | Needs %d more" % (bin_entry, flink, allocations, amount_needed), address = freelist_addr)
             elif heap_bucket == 0:
-
                     
-                if emptybins and heap_bucket == 0 and bin_entry != 0x1 and bin_entry != 0x0 and flink == 0:
+                if emptybins and bin_entry != 0x1 and bin_entry != 0x0 and flink == 0:
                     window.Log("Bin[0x%04x] | Flink => 0x%08x :: Bin is Empty!" % (bin_entry, flink), address = freelist_addr)
-                elif heap_bucket == 0 and bin_entry != 0x1 and bin_entry != 0x0 and bin_entry == (block.ArraySize-0x1) and flink != 0:
+                elif bin_entry != 0x1 and bin_entry != 0x0 and bin_entry == (block.ArraySize-0x1) and flink != 0:
                     window.Log("Bin[0x%04x] | Flink => 0x%08x :: last entry contains large chunks!" % (bin_entry, flink), address = freelist_addr)
-                elif heap_bucket == 0 and flink != 0 and bin_entry != 0x1 and bin_entry != 0x0:
-                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: Free chunks available (unknown allocations)" % (bin_entry, flink), address = freelist_addr)
+                elif flink != 0 and bin_entry != 0x1 and bin_entry != 0x0:
+                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: Has had %d allocations | Needs %d more" % (bin_entry, flink, allocations, amount_needed), address = freelist_addr)
                     allocations_needed[bin_entry] = 0
-                                # amount needed should always be between 0-18
+                # amount needed should always be between 0-18
                 if amount_needed in range (0x01,0x12):
                     allocations_needed[bin_entry] = amount_needed
                     
@@ -1545,23 +1537,74 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
         window.Log("")
         window.Log("(+) FreeList:")
         window.Log("-------------")
-        for a in range(0, num_of_freelists):
+        
+        for a in range(block.BaseIndex, num_of_freelists): # num_of_freelists
             entry= block.FreeList[a]
             e=entry[0]
             nodes = []
+            overwrite_flink_blink = False
+            overwrite_size = False
             if e[0]:
-                chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a)
+                chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a+block.BaseIndex)
+                window.Log("Bin[0x%04x]    0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (a+block.BaseIndex, e[0], e[1], e[2]), address = e[0])
+                
+                # logic to detect overwrite via the size (decode the header on the fly)
+                encoded_header = imm.readMemory(e[0]-0x8,0x4)
+                (encoded_header) = struct.unpack("L", encoded_header) 
+                result = "%x" % (encoded_header[0] ^ pheap.EncodingKey)
+                if int(result[len(result)-4:len(result)],16) != a+block.BaseIndex:
+                    window.Log("               -> Detected chunk size overwrite!")
+                    overwrite_size = True
+                    if e[1] == e[2]:
+                        overwrite_flink_blink = True
+                        window.Log("               -> Detected the flink/blink to be overwritten as well!") 
+                else:
+                    window.Log("Chunk:         0x%08x has had its size validated correctly" % e[0])
+                    if e[1] == e[2]:
+                        overwrite_flink_blink = True
+                        window.Log("               -> Detected flink/blink overwrite without overewriting the size!? Do you have a 4-n byte write!?")                    
+
                 if graphic_structure:
-                    nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
-                window.Log("Bin[0x%04x]    0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (a, e[0], e[1], e[2]), address = e[0])
-                for e in entry[1:]:
-                    chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a)
-                    window.Log("               0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (e[0], e[1], e[2]), address= e[0])    
-                    if graphic_structure:
+                    if overwrite_flink_blink and not overwrite_size:
+                        nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nflink/blink are owned!", fillcolor="red"))
+                    elif overwrite_flink_blink and overwrite_size:
+                        nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nsize and flink/blink are owned!", fillcolor="red"))
+                    elif not overwrite_flink_blink and not overwrite_size:
                         nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
-            
+                    
+                
+                for e in entry[1:]:
+                    chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a+block.BaseIndex)
+                    window.Log("               0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (e[0], e[1], e[2]), address= e[0])    
+                    
+                    # logic to detect overwrite via the size (decode the header on the fly)
+                    encoded_header = imm.readMemory(e[0]-0x8,0x4)
+                    (encoded_header) = struct.unpack("L", encoded_header) 
+                    result = "%x" % (encoded_header[0] ^ pheap.EncodingKey)
+                    if int(result[len(result)-4:len(result)],16) != a+block.BaseIndex:
+                        window.Log("    -> Detected chunk size overwrite!")
+                        overwrite_size = True
+                        if e[1] == e[2]:
+                            window.Log("               -> Detected the flink/blink to be overwritten as well!")
+                            overwrite_flink_blink = True
+                    else:
+                        window.Log("Chunk:         0x%08x has had its size validated correctly" % e[0])
+                        if e[1] == e[2]:
+                            window.Log("    -> Detected flink/blink overwrite without overewriting the size!? Do you have a 4-n byte write!?")                         
+                            overwrite_flink_blink = True
+                        
+                    if graphic_structure:
+                        if overwrite_flink_blink and not overwrite_size:
+                            nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nflink/blink are owned!", fillcolor="red"))
+                        elif overwrite_flink_blink and overwrite_size:
+                            nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nsize and flink/blink are owned!", fillcolor="red"))
+                        elif not overwrite_size and not overwrite_flink_blink:
+                            nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
+                            
             if graphic_structure:
-                list_hint_dict[a] = nodes
+                if a not in list_hint_dict:
+                    list_hint_dict[a] = nodes
+                    
                 # no matter how many allocations, you will never trigger LFH
                 if a == 127:
                     list_data = "ListHint[0x%x]\nNo amount of allocations will\ntrigger LFH for this bin" % (a) 
@@ -1571,30 +1614,47 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
                     list_data = "ListHint[0x%x]\nNo. of allocations to LFH: %d" % (a,allocations_needed[a])
                 else:
                     list_data = "ListHint[0x%x]" % (a)
-                ListHint_nodes.append(pydot.Node("ListHint[0x%x]" % a, style="filled", shape="rectangle", label=list_data, fillcolor="#66FF66"))
+                ListHint_nodes[a] = pydot.Node("ListHint[0x%x]" % a, style="filled", shape="rectangle", label=list_data, fillcolor="#66FF66")
         
         if graphic_structure:
-            i = 0
-            chunk_nodes = []
-            for hint in ListHint_nodes:
-                nodes_to_add = list_hint_dict[i]
+            k = 0
+            for listhintnode in ListHint_nodes.keys():
+                nodes_to_add = list_hint_dict[listhintnode]
                 if len(nodes_to_add) > 0:
-                    chunk_nodes.append(i)
-                    listhintgraph.add_node(hint)
+                    if k not in chunk_nodes:
+                        chunk_nodes.append(k)
+                        
+                    listhintgraph.add_node(ListHint_nodes[listhintnode])
                     # link to the first chunk in the Bin
-                    listhintgraph.add_edge(pydot.Edge(hint, nodes_to_add[0]))
+                    # if statement not working, not sure why.... alternate fix is using used_nodes array
+                    if not listhintgraph.get_edge(ListHint_nodes[listhintnode], nodes_to_add[0]):   
+                        edge = pydot.Edge(ListHint_nodes[listhintnode], nodes_to_add[0])
+                        # needs to be check against multiple FreeList's
+                        # checks to see if the ListHint Entry and the first chunk have been added to the node_list
+                        # if then have, then they already have an edge, so dont add a second edge (needed for multiple BlocksIndex)
+                        if (node_list.count(ListHint_nodes[listhintnode]) < 1 and node_list.count(nodes_to_add[0]) < 1):
+                            listhintgraph.add_edge(edge)
+                            node_list.append(ListHint_nodes[listhintnode])
+                            node_list.append(nodes_to_add[0])
                     j = 0
                     for node in nodes_to_add:
                         listhintgraph.add_node(node)
                         if j+1 <= len(nodes_to_add)-1:
-                            listhintgraph.add_edge(pydot.Edge(node, nodes_to_add[j+1]))
-                        if ((chunk_nodes.index(i)-1) >= 0):
-                            prev_nodes_to_link = list_hint_dict[chunk_nodes[chunk_nodes.index(i)-1]]
+                            edge = pydot.Edge(node, nodes_to_add[j+1])
+                            node_list.append(node)
+                            if not node_list.count(node) == 2 and not node_list.count(nodes_to_add[j+1]) == 2:
+                                listhintgraph.add_edge(edge)
+                            
+                        if ((chunk_nodes.index(k)-1) >= 0):
+                            prev_nodes_to_link = list_hint_dict[chunk_nodes[chunk_nodes.index(k)-1]]
                             # check the previous node to see if there is an edge, if not, add it
-                            if not listhintgraph.get_edge(prev_nodes_to_link[-1],node) and nodes_to_add.index(node) == 0:
-                                listhintgraph.add_edge(pydot.Edge(prev_nodes_to_link[-1],node))
+                            if not listhintgraph.get_edge(prev_nodes_to_link[-1],node) and nodes_to_add.index(node) == 0:     
+                                edge = pydot.Edge(prev_nodes_to_link[-1],node)
+                                node_list.append(prev_nodes_to_link[-1])
+                                if not node_list.count(prev_nodes_to_link[-1]) >= 2:
+                                    listhintgraph.add_edge(edge)
                         j+=1
-                i+=1
+                k+=1
         if graphic_structure:
             listhintgraph.set_graphviz_executables(paths)
             listhintgraph.write_png(filename+".png")
