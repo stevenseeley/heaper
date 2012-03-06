@@ -55,7 +55,7 @@ available_commands = ["dumppeb", "dp", "dumpheaps", "dh", "analyseheap", "ah", "
                       "analysefrontend", "af", "analysebackend", "ab", "analysechunks", "ac", 
                       "dumpfunctionpointers", "dfp", "help", "-h", "analysesegments", "as", "-f", 
                       "-m", "-p", "freelistinuse", "fliu", "hook", "analyseheapcache", "ahc", "h",
-                      "exploit","exp","u","update"]
+                      "exploit","exp","u","update", "patch", "p"]
 
 # graphiz engine needs this under windows 7
 paths = {"dot":"C:\\Program Files\\Graphviz 2.28\\bin\\dot.exe","twopi":"C:\\Program Files\\Graphviz 2.28\\bin\\twopi.exe",
@@ -230,13 +230,44 @@ def chr_to_hex(n):
 def reverse(text):
     return ''.join([text[i] for i in range(len(text)-1,-1,-1)])
 
-def find_key(dic, val):
-    """return the key of dictionary dic given the value"""
-    try:
-        ret_value = [k for k, v in dic.iteritems() if v == val][0]
-    except:
-        ret_value = False
-    return ret_value
+# patch the PEB
+# thanks to BoB from Team PEiD
+def patch_PEB(imm, window):
+    PEB = imm.getPEBAddress()
+    # Just incase .. ;)
+    if PEB == 0:
+        window.Log("(-) No PEB to patch .. !?" )
+        return
+
+    window.Log("(+) Patching PEB.IsDebugged ..", address = PEB + 0x02 )
+    imm.writeMemory(PEB + 0x02, imm.assemble( "db 0" ) )
+
+    a = imm.readLong(PEB + 0x18)
+    a += 0x10
+    window.Log("(+) Patching PEB.ProcessHeap.Flag ..", address = a )
+    imm.writeLong( a, 0 )
+
+    window.Log("(+) Patching PEB.NtGlobalFlag ..", address = PEB + 0x68 )
+    imm.writeLong(PEB + 0x68, 0)
+
+    # Patch PEB_LDR_DATA 0xFEEEFEEE fill bytes ..  (about 3000 of them ..)
+    # lulz nice trick /mr_me
+    a = imm.readLong(PEB + 0x0C)
+    window.Log("(+) Patching PEB.LDR_DATA filling ..", address = a)
+    while a != 0:
+        a += 1
+        try:
+            b = imm.readLong(a)
+            c = imm.readLong(a + 4)
+            # Only patch the filling runs ..
+            if (b == 0xFEEEFEEE) and (c == 0xFEEEFEEE):
+                imm.writeLong(a, 0)
+                imm.writeLong(a + 4, 0)
+                a += 7
+        except:
+            break
+    return True
+        
 
 def githash(data):
     s = sha1()
@@ -472,17 +503,8 @@ def hook_on(imm, LABEL, bp_address, function_name, bp_retaddress, Disable, windo
             window.Log("(?) HookAlloc is already running")
         return "Hooked"
 
-# banners
-# =======
-def banner(imm):
-    imm.log("----------------------------------------",highlight=1) 
-    imm.log("    __                         ",highlight=1)
-    imm.log("   / /  ___ ___ ____  ___ ____ ",highlight=1)
-    imm.log("  / _ \/ -_) _ `/ _ \/ -_) __/ ",highlight=1)
-    imm.log(" /_//_/\__/\_,_/ .__/\__/_/    ",highlight=1)
-    imm.log("              /_/              ",highlight=1)
-    imm.log("----------------------------------------",highlight=1)
-    imm.log("by mr_me :: steventhomasseeley@gmail.com",highlight=1)
+# banner
+# ======
 
 def win_banner(win):
     win.Log("----------------------------------------") 
@@ -494,28 +516,32 @@ def win_banner(win):
     win.Log("----------------------------------------")
     win.Log("by mr_me :: steventhomasseeley@gmail.com")
 
-def usage(imm):
-    imm.log("")
-    imm.log("****   available commands   ****")
-    imm.log("")
-    imm.log("dumppeb / dp                          : dump the PEB pointers")
-    imm.log("dumpteb / dt                          : dump the TEB pointers")
-    imm.log("dumpheaps / dh                        : dump the heaps")
-    imm.log("dumpfunctionpointers / dfp            : dump all the processes function pointers")
-    imm.log("analyseheap <heap> / ah <heap>        : analyse a particular heap")
-    imm.log("analysefrontend <heap> / af <heap>    : analyse a particular heap's frontend data structure")
-    imm.log("analysebackend <heap> / ab <heap>     : analyse a particular heap's backend data structure")
-    imm.log("analysesegments <heap> / as <heap>    : analyse a particular heap's segments")
-    imm.log("analysechunks <heap> / ac <heap>      : analyse a particular heap's chunks")
-    imm.log("analyseheapcache <heap> / ahc <heap>  : analyse a particular heap's cache (FreeList[0])")
-    imm.log("freelistinuse <heap> / fliu <heap>    : analyse/patch the FreeListInUse structure")
-    imm.log("hook <heap> / h -h <func>             : Hook various functions that create/destroy/manipulate a heap")
-    imm.log("update / u                            : Update to the latest version")
-    imm.log("exploit <heap> / exp <heap>           : Perform heuristics against the FrontEnd and BackEnd allocators")
-    imm.log("                                        to determine exploitable conditions")
-    imm.log("")
-    imm.log("Want more info about a given command? Run !heaper help <command>",highlight=1)
-    imm.log("")
+# usage
+# =====
+def usage(window, imm):
+    window.Log("")
+    window.Log("****   available commands   ****")
+    window.Log("")
+    window.Log("dumppeb / dp                          : Dump the PEB pointers")
+    window.Log("dumpteb / dt                          : Dump the TEB pointers")
+    window.Log("dumpheaps / dh                        : Dump the heaps")
+    window.Log("dumpfunctionpointers / dfp            : Dump all the processes function pointers")
+    window.Log("analyseheap <heap> / ah <heap>        : Analyse a particular heap")
+    window.Log("analysefrontend <heap> / af <heap>    : Analyse a particular heap's frontend data structure")
+    window.Log("analysebackend <heap> / ab <heap>     : Analyse a particular heap's backend data structure")
+    window.Log("analysesegments <heap> / as <heap>    : Analyse a particular heap's segments")
+    window.Log("analysechunks <heap> / ac <heap>      : Analyse a particular heap's chunks")
+    window.Log("analyseheapcache <heap> / ahc <heap>  : Analyse a particular heap's cache (FreeList[0])")
+    window.Log("freelistinuse <heap> / fliu <heap>    : Analyse/patch the FreeListInUse structure")
+    window.Log("hook <heap> / h -h <func>             : Hook various functions that create/destroy/manipulate a heap")
+    window.Log("update / u                            : Update to the latest version")
+    window.Log("patch <function/data structure> / p   : Patch a function or datastructure")
+    window.Log("exploit <heap> / exp <heap>           : Perform heuristics against the FrontEnd and BackEnd allocators")
+    window.Log("                                        to determine exploitable conditions")
+    window.Log("")
+    window.Log("Want more info about a given command? Run !heaper help <command>")
+    window.Log("Detected the operating system to be windows %s, keep this in mind." % (imm.getOsVersion()))
+    window.Log("")
     return "eg: !heaper al 00480000"
 
 def get_extended_usage():
@@ -528,7 +554,7 @@ def get_extended_usage():
     extusage["dumppeb"] += "---------------------------------------------\n"
     extusage["dumppeb"] += "Use -m to view the PEB management structure\n"
     extusage["hook"] = "\nhook <heap> / h : Hook various functions that create/destroy/manipulate a heap\n"
-    extusage["hook"] += "---------------------------------------------\n"
+    extusage["hook"] += "------------------------------------------------------------------------------\n"
     extusage["hook"] += "Use -h to hook any function.\n"
     extusage["hook"] += "Use -u to unhook any function.\n"
     extusage["hook"] += "Available functions to hook are: \n"
@@ -572,9 +598,18 @@ def get_extended_usage():
     extusage["analysesegments"] = "\nanalysesegment(s) <heap> / as <heap> : Analyse a particular heap's segment structure(s)\n"
     extusage["analysesegments"] += "------------------------------------------------------------------------------------\n"   
     
+    extusage["patch"] = "\npatch <function/data structures> / p <function/data structures> : patch memory for the heap\n"
+    extusage["patch"] += "-------------------------------------------------------------------------------------------\n" 
+    extusage["patch"] += "Use 'PEB' to patch the following areas:\n"
+    extusage["patch"] += " - PEB.IsDebugged\n"
+    extusage["patch"] += " - PEB.ProcessHeap.Flag\n"
+    extusage["patch"] += " - PEB.NtGlobalFlag\n"
+    extusage["patch"] += " - PEB.LDR_DATA\n"
+    extusage["patch"] += "example: !heaper patch PEB\n"
+    
     extusage["analyseheapcache"] = "\nanalyseheapcache <heap> / ahc <heap> : Analyse a particular heap's cache (FreeList[0])\n"
     extusage["analyseheapcache"] += "------------------------------------------------------------------------------------\n"   
-    extusage["analyseheapcache"] += "Use -g to view a graphical representation of the heap cache (dev)\n"
+    #extusage["analyseheapcache"] += "Use -g to view a graphical representation of the heap cache (dev)\n"
     
     extusage["analysechunks"] = "\nanalysechunks <heap> / ac <heap> : Analyse a particular heap's chunks\n"
     extusage["analysechunks"] += "---------------------------------------------------------------------\n"
@@ -619,6 +654,10 @@ def set_up_usage():
     cmds["fliu"] = set_command("freelistinuse", "analyse/patch the FreeListInUse structure",get_extended_usage()["freelistinuse"], "fliu")
     cmds["hook"] = set_command("hook", "Hook various functions that create/destroy/manipulate a heap",get_extended_usage()["hook"], "h")
     cmds["h"] = set_command("hook", "Hook various functions that create/destroy/manipulate a heap",get_extended_usage()["hook"], "h")
+    
+    cmds["patch"] = set_command("patch", "Patch various data structures and functions",get_extended_usage()["patch"], "p")
+    cmds["p"] = set_command("patch", "Patch various data structures and functions",get_extended_usage()["patch"], "p")
+    
     cmds["exploit"] = set_command("exploit", "Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions",get_extended_usage()["exploit"], "exp")
     cmds["exp"] = set_command("exploit", "Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions",get_extended_usage()["exploit"], "exp")    
     return cmds
@@ -828,12 +867,12 @@ def freelist_and_lookaside_heuristics(window, chunk_data, pheap, imm, data_struc
         imm.forgetKnowledge(chunk_data)
         return vuln_chunks
     
-def dump_heap(imm):
-    imm.log("Listing available heaps: ")
-    imm.log("")
+def dump_heap(imm, window):
+    window.Log("Listing available heaps: ")
+    window.Log("")
     for hndx in imm.getHeapsAddress():
-        imm.log("Heap: 0x%08x" % hndx, address = hndx, focus = 1)
-    return "Heap command successful"      
+        window.Log("Heap: 0x%08x" % hndx, address = hndx, focus = 1)
+    return "(+) Dumped all heaps for the debugged process"      
         
         
 def dump_peb(imm, window, dump_management=False):
@@ -853,34 +892,82 @@ def dump_peb(imm, window, dump_management=False):
     window.Log("")
     
     if dump_management:
-        
+        peb_struct = imm.getPEB()
         # some PEB members are not in immlib API
         AtlThunkSListPtr32 = imm.readMemory(peb+0x34, 4)
-        (AtlThunkSListPtr32) = struct.unpack("L", AtlThunkSListPtr32)  
+        (AtlThunkSListPtr32) = struct.unpack("L", AtlThunkSListPtr32)[0]
+        
+        # only need em if we are running win7's PEB structure
+        if imm.getOsVersion() == "7":
+            AtlThunkSListPtr = imm.readMemory(peb+0x20, 4)
+            (AtlThunkSListPtr) = struct.unpack("L", AtlThunkSListPtr)[0]
+            IFEOKey = imm.readMemory(peb+0x24, 4)
+            (IFEOKey) = struct.unpack("L", IFEOKey)[0]
+            ApiSetMap = imm.readMemory(peb+0x38, 4)
+            (ApiSetMap) = struct.unpack("L", ApiSetMap)[0]  
+            FlsBitmapBits = imm.readMemory(peb+0x21c, 8)
+            (FlsBitmapBits) = struct.unpack("d", FlsBitmapBits)[0]
+            FlsBitmapBits2 = imm.readMemory(peb+0x21c+0x8, 8)
+            (FlsBitmapBits2) = struct.unpack("d", FlsBitmapBits2)[0]
+            FlsBitmap = imm.readMemory(peb+0x218, 4)
+            (FlsBitmap) = struct.unpack("L", FlsBitmap)[0] 
+            FlsListHead = imm.readMemory(peb+0x210, 4)
+            (FlsListHead) = struct.unpack("L", FlsListHead)[0] 
+            FlsCallback = imm.readMemory(peb+0x20c, 4)
+            (FlsCallback) = struct.unpack("L", FlsCallback)[0]
+            FlsHighIndex = imm.readMemory(peb+0x22c, 4)
+            (FlsHighIndex) = struct.unpack("L", FlsHighIndex)[0]  
+            WerRegistrationData = imm.readMemory(peb+0x230, 4)
+            (WerRegistrationData) = struct.unpack("L", WerRegistrationData)[0]             
+            WerShipAssertPtr = imm.readMemory(peb+0x234, 4)
+            (WerShipAssertPtr) = struct.unpack("L", WerShipAssertPtr)[0]    
+            pContextData = imm.readMemory(peb+0x238, 4)
+            (pContextData) = struct.unpack("L", pContextData)[0]   
+            pImageHeaderHash = imm.readMemory(peb+0x23c, 4)
+            (pImageHeaderHash) = struct.unpack("L", pImageHeaderHash)[0]               
+            offset_three = imm.readMemory(peb+0x03, 1)
+            (offset_three) = struct.unpack("B", offset_three)[0] 
+            # get the binary 0/1 representation
+            binary_three = bin(offset_three)[2:].rjust(8, '0')
+            CrossProcessFlags = imm.readMemory(peb+0x28, 4)
+            (CrossProcessFlags) = struct.unpack("L", CrossProcessFlags)[0]
+            # 4 bytes instead of 1 so we expand to 32 bits
+            binary_twenty_eight = bin(CrossProcessFlags)[2:].rjust(32, '0')
+            
         AppCompatFlags = imm.readMemory(peb+0x1d8, 8)
-        (AppCompatFlags) = struct.unpack("LL", AppCompatFlags) 
+        (AppCompatFlags) = struct.unpack("LL", AppCompatFlags)[0] 
         AppCompatFlagsUser = imm.readMemory(peb+0x1e0, 8)
-        (AppCompatFlagsUser) = struct.unpack("LL", AppCompatFlagsUser) 
+        (AppCompatFlagsUser) = struct.unpack("LL", AppCompatFlagsUser)[0] 
         pShimData = imm.readMemory(peb+0x1e8, 4)
-        (pShimData) = struct.unpack("L", pShimData)
+        (pShimData) = struct.unpack("L", pShimData)[0]
         ActivationContextData = imm.readMemory(peb+0x1f8, 4)
-        (ActivationContextData) = struct.unpack("L", ActivationContextData)
+        (ActivationContextData) = struct.unpack("L", ActivationContextData)[0]
         ProcessAssemblyStorageMap = imm.readMemory(peb+0x1fc, 4)
-        (ProcessAssemblyStorageMap) = struct.unpack("L", ProcessAssemblyStorageMap)
+        (ProcessAssemblyStorageMap) = struct.unpack("L", ProcessAssemblyStorageMap)[0]
         SystemDefaultActivationContextData = imm.readMemory(peb+0x200, 4)
-        (SystemDefaultActivationContextData) = struct.unpack("L", SystemDefaultActivationContextData)
+        (SystemDefaultActivationContextData) = struct.unpack("L", SystemDefaultActivationContextData)[0]
         SystemAssemblyStorageMap = imm.readMemory(peb+0x204, 4)
-        (SystemAssemblyStorageMap) = struct.unpack("L", SystemAssemblyStorageMap)
+        (SystemAssemblyStorageMap) = struct.unpack("L", SystemAssemblyStorageMap)[0]
         MinimumStackCommit = imm.readMemory(peb+0x208, 4)
-        (MinimumStackCommit) = struct.unpack("L", MinimumStackCommit) 
-        peb_struct = imm.getPEB()
+        (MinimumStackCommit) = struct.unpack("L", MinimumStackCommit)[0]
+
         window.Log("---------------------------------------------------------")
         window.Log("PEB Management Structure @ 0x%08x" % peb,peb)
         window.Log("---------------------------------------------------------")
         window.Log("+0x000 InheritedAddressSpace                 : 0x%08x" % peb_struct.InheritedAddressSpace, peb_struct.InheritedAddressSpace)
         window.Log("+0x001 ReadImageFileExecOptions              : 0x%08x" % peb_struct.ReadImageFileExecOptions, peb_struct.ReadImageFileExecOptions)
         window.Log("+0x002 BeingDebugged                         : 0x%08x" % peb_struct.BeingDebugged, peb_struct.BeingDebugged) 
-        window.Log("+0x003 SpareBool                             : 0x%08x" % peb_struct.SpareBool, peb_struct.SpareBool)
+        if imm.getOsVersion() == "xp":
+            window.Log("+0x003 SpareBool                             : 0x%08x" % peb_struct.SpareBool, peb_struct.SpareBool)
+        elif imm.getOsVersion() == "7":
+            # according the wingdbg symbols
+            window.Log("+0x003 BitField                              : 0x%x" % offset_three,offset_three)
+            window.Log("+0x003 ImageUsesLargePages                   : bit: %s" % binary_three[1])
+            window.Log("+0x003 IsProtectedProcess                    : bit: %s" % binary_three[2])
+            window.Log("+0x003 IsLegacyProcess                       : bit: %s" % binary_three[3])
+            window.Log("+0x003 IsImageDynamicallyRelocated           : bit: %s" % binary_three[4])
+            window.Log("+0x003 SkipPatchingUser32Forwarders          : bit: %s" % binary_three[5])
+            window.Log("+0x003 SpareBits                             : bits 6-8: %s" % binary_three[-3:len(binary_three)])
         window.Log("+0x004 Mutant                                : 0x%08x" % peb_struct.Mutant, peb_struct.Mutant)
         window.Log("+0x008 ImageBaseAddress                      : 0x%08x" % peb_struct.ImageBaseAddress, peb_struct.ImageBaseAddress)
         window.Log("+0x00c Ldr                                   : 0x%08x" % peb_struct.Ldr, peb_struct.Ldr)
@@ -888,20 +975,41 @@ def dump_peb(imm, window, dump_management=False):
         window.Log("+0x014 SubSystemData                         : 0x%08x" % peb_struct.SubSystemData, peb_struct.SubSystemData)
         window.Log("+0x018 ProcessHeap                           : 0x%08x" % peb_struct.ProcessHeap, peb_struct.ProcessHeap)
         window.Log("+0x01c FastPebLock                           : 0x%08x" % peb_struct.FastPebLock, peb_struct.FastPebLock)
-        window.Log("+0x020 FastPebLockRoutine                    : 0x%08x" % peb_struct.FastPebLockRoutine, peb_struct.FastPebLockRoutine)
-        window.Log("+0x024 FastPebUnLockRoutine                  : 0x%08x" % peb_struct.FastPebUnlockRoutine, peb_struct.FastPebUnlockRoutine)
-        window.Log("+0x028 EnvironmentUpdateCount                : 0x%08x" % peb_struct.EnviromentUpdateCount, peb_struct.EnviromentUpdateCount)
+        if imm.getOsVersion() == "xp":
+            window.Log("+0x020 FastPebLockRoutine                    : 0x%08x" % peb_struct.FastPebLockRoutine, peb_struct.FastPebLockRoutine)
+            window.Log("+0x024 FastPebUnLockRoutine                  : 0x%08x" % peb_struct.FastPebUnlockRoutine, peb_struct.FastPebUnlockRoutine)
+            window.Log("+0x028 EnvironmentUpdateCount                : 0x%08x" % peb_struct.EnviromentUpdateCount, peb_struct.EnviromentUpdateCount)
+        elif imm.getOsVersion() == "7":
+            window.Log("+0x020 AtlThunkSListPtr                      : 0x%08x" % AtlThunkSListPtr,AtlThunkSListPtr)
+            window.Log("+0x024 IFEOKey                               : 0x%08x" % IFEOKey, IFEOKey)
+            # according the wingdbg symbols
+            window.Log("+0x028 CrossProcessFlags                     : 0x%08x" % CrossProcessFlags,CrossProcessFlags)
+            window.Log("+0x028 ProcessInJob                          : bit: %s" % binary_twenty_eight[1])
+            window.Log("+0x028 ProcessInitializing                   : bit: %s" % binary_twenty_eight[2])
+            window.Log("+0x028 ProcessUsingVEH                       : bit: %s" % binary_twenty_eight[3])
+            window.Log("+0x028 ProcessUsingVCH                       : bit: %s" % binary_twenty_eight[4])
+            window.Log("+0x028 ProcessUsingFTH                       : bit: %s" % binary_twenty_eight[5])
+            window.Log("+0x028 ReservedBits0                         : bits 6-32: %s" % binary_twenty_eight[-27:len(binary_twenty_eight)])
         window.Log("+0x02c KernelCallbackTable                   : 0x%08x" % peb_struct.KernelCallbackTable, peb_struct.KernelCallbackTable)
+        if imm.getOsVersion() == "7":
+            window.Log("+0x02c UserSharedInfoPtr                     : 0x%08x" % peb_struct.KernelCallbackTable, peb_struct.KernelCallbackTable)
         for sysResv in peb_struct.SystemReserved:
-            window.Log("+0x030 SystemReserved                        : 0x%08x" % sysResv, sysResv)
+            window.Log("    +0x030 SystemReserved                    : 0x%08x" % sysResv, sysResv) 
         window.Log("+0x034 AtlThunkSListPtr32                    : 0x%08x" % AtlThunkSListPtr32, AtlThunkSListPtr32)
-        window.Log("+0x038 FreeList                              : 0x%08x" % peb_struct.FreeList, peb_struct.FreeList)
+        if imm.getOsVersion() == "xp": 
+            window.Log("+0x038 FreeList                              : 0x%08x" % peb_struct.FreeList, peb_struct.FreeList)
+        elif imm.getOsVersion() == "7":
+            window.Log("+0x038 ApiSetMap                             : 0x%08x" % ApiSetMap, ApiSetMap)
         window.Log("+0x03c TlsExpansionCounter                   : 0x%08x" % peb_struct.TlsExpansionCounter, peb_struct.TlsExpansionCounter)
         window.Log("+0x040 TlsBitmap                             : 0x%08x" % peb_struct.TlsBitmap, peb_struct.TlsBitmap)
         for bits in peb_struct.TlsBitmapBits:
-            window.Log("+0x044 TlsBitmapBits                         : 0x%08x" % bits, bits)
+            window.Log("    +0x044 TlsBitmapBits                     : 0x%08x" % bits, bits)
         window.Log("+0x04c ReadOnlySharedMemoryBase              : 0x%08x" % peb_struct.ReadOnlySharedMemoryBase, peb_struct.ReadOnlySharedMemoryBase)
-        window.Log("+0x050 ReadOnlySharedMemoryHeap              : 0x%08x" % peb_struct.ReadOnlySharedMemoryheap, peb_struct.ReadOnlySharedMemoryheap)
+        if imm.getOsVersion() == "xp":
+            window.Log("+0x050 ReadOnlySharedMemoryHeap              : 0x%08x" % peb_struct.ReadOnlySharedMemoryheap, peb_struct.ReadOnlySharedMemoryheap)
+        elif imm.getOsVersion() == "7":
+            # ReadOnlySharedMemoryheap == HotpatchInformation
+            window.Log("+0x050 HotpatchInformation                   : 0x%08x" % peb_struct.ReadOnlySharedMemoryheap, peb_struct.ReadOnlySharedMemoryheap)
         window.Log("+0x054 ReadOnlyStaticServerData              : 0x%08x" % peb_struct.ReadOnlyStaticServerData, peb_struct.ReadOnlyStaticServerData)
         window.Log("+0x058 AnsiCodePageData                      : 0x%08x" % peb_struct.AnsiCodePageData, peb_struct.AnsiCodePageData)
         window.Log("+0x05c OemCodePageData                       : 0x%08x" % peb_struct.OemCodePageData, peb_struct.OemCodePageData)
@@ -929,13 +1037,17 @@ def dump_peb(imm, window, dump_management=False):
         window.Log("+0x0b4 ImageSubsystem                        : 0x%08x" % peb_struct.ImageSubsystem, peb_struct.ImageSubsystem) 
         window.Log("+0x0b8 ImageSubsystemMajorVersion            : 0x%08x" % peb_struct.ImageSubsystemMajorVersion, peb_struct.ImageSubsystemMajorVersion) 
         window.Log("+0x0bc ImageSubsystemMinorVersion            : 0x%08x" % peb_struct.ImageSubsystemMinorVersion, peb_struct.ImageSubsystemMinorVersion) 
-        window.Log("+0x0c0 ImageProcessAffinityMask              : 0x%08x" % peb_struct.ImageProcessAffinityMask, peb_struct.ImageProcessAffinityMask) 
+        if imm.getOsVersion() == "XP":
+            # ImageProcessAffinityMask == ActiveProcessAffinityMask 
+            window.Log("+0x0c0 ImageProcessAffinityMask              : 0x%08x" % peb_struct.ImageProcessAffinityMask, peb_struct.ImageProcessAffinityMask) 
+        elif imm.getOsVersion() == "7":
+            window.Log("+0x0c0 ActiveProcessAffinityMask             : 0x%08x" % peb_struct.ImageProcessAffinityMask, peb_struct.ImageProcessAffinityMask) 
         for buff in peb_struct.GdiHandleBuffer:
-            window.Log("+0x0c4 GdiHandleBuffer                       : 0x%08x" % buff, buff) 
+            window.Log("    +0x0c4 GdiHandleBuffer                   : 0x%08x" % buff, buff) 
         window.Log("+0x14c PostProcessInitRoutine                : 0x%08x" % peb_struct.PostProcessInitRoutine, peb_struct.PostProcessInitRoutine) 
         window.Log("+0x150 TlsExpansionBitmap                    : 0x%08x" % peb_struct.TlsExpansionBitmap, peb_struct.TlsExpansionBitmap) 
         for bitmapbits in peb_struct.TlsExpansionBitmapBits:
-            window.Log("+0x154 TlsExpansionBitmapBits                : 0x%08x" % bitmapbits, bitmapbits) 
+            window.Log("    +0x154 TlsExpansionBitmapBits            : 0x%08x" % bitmapbits, bitmapbits) 
         window.Log("+0x1d4 SessionId                             : 0x%08x" % peb_struct.SessionId, peb_struct.SessionId) 
         window.Log("+0x1d8 AppCompatFlags                        : 0x%08x" % AppCompatFlags, AppCompatFlags) 
         window.Log("+0x1e0 AppCompatFlagsUser                    : 0x%08x" % AppCompatFlagsUser, AppCompatFlagsUser) 
@@ -947,11 +1059,29 @@ def dump_peb(imm, window, dump_management=False):
         window.Log("+0x200 SystemDefaultActivationContextData    : 0x%08x" % SystemDefaultActivationContextData, SystemDefaultActivationContextData) 
         window.Log("+0x204 SystemAssemblyStorageMap              : 0x%08x" % SystemAssemblyStorageMap, SystemAssemblyStorageMap) 
         window.Log("+0x208 MinimumStackCommit                    : 0x%08x" % MinimumStackCommit, MinimumStackCommit) 
+        if imm.getOsVersion() == "7":
+            window.Log("+0x20c FlsCallback                       : 0x%08x" % FlsCallback,FlsCallback)
+            window.Log("+0x210 FlsListHead                       : 0x%08x" % FlsListHead,FlsListHead)
+            window.Log("+0x218 FlsBitmap                         : 0x%08x" % FlsBitmap,FlsBitmap)
+            window.Log("+0x21c FlsBitmapBits                     : 0x%08x%08x" % (FlsBitmapBits,FlsBitmapBits2))
+            window.Log("+0x22c FlsHighIndex                      : 0x%08x" % FlsHighIndex,FlsHighIndex)
+            window.Log("+0x230 WerRegistrationData               : 0x%08x" % WerRegistrationData,WerRegistrationData)
+            window.Log("+0x234 WerShipAssertPtr                  : 0x%08x" % WerShipAssertPtr,WerShipAssertPtr)
+            window.Log("+0x238 pContextData                      : 0x%08x" % pContextData,pContextData)
+            window.Log("+0x23c pImageHeaderHash                  : 0x%08x" % pImageHeaderHash,pImageHeaderHash)
+        
         window.Log("---------------------------------------------------------")
         window.Log("")
         return "Dumped PEB successfully"
-    else:
-        window.Log("PEB is located at 0x%08x" % peb,peb)
+    
+    else: 
+        window.Log("(+) The PEB is located at 0x%08x" % peb,peb)
+        peb_struct = imm.getPEB()
+        # check at least to locations where the PEB might be patched..
+        if peb_struct.BeingDebugged and peb_struct.NtGlobalFlag:
+            window.Log("(!) Beaware! the PEB is not patched and heap operations may detect a debugger!")
+        elif peb_struct.BeingDebugged == 0 and peb_struct.NtGlobalFlag == 0:
+            window.Log("(+) Excellent, the PEB appears to be patched")
         return "PEB is located at 0x%08x" % peb
 
 def dump_teb(imm, window):
@@ -971,11 +1101,10 @@ def dump_teb(imm, window):
     window.Log("")
     try:
         currentTEB = threads[currenttid].getTEB()
-        window.Log("The current TEB id is: %s and is located at: 0x%08x" % (currenttid,currentTEB),currentTEB)
+        window.Log("(+) The current TEB id is: %s and is located at: 0x%08x" % (currenttid,currentTEB),currentTEB)
     except:
-        window.Log("The current TEB id is: %s and is located at an unknown address" % (currenttid))
+        window.Log("(-) The current TEB id is: %s and is located at an unknown address" % (currenttid))
     
-    window.Log("Other TEB's in this process:")
     tebArray = {}
     
     for key in threads:
@@ -986,8 +1115,13 @@ def dump_teb(imm, window):
     valuelist = tebArray.keys()
     valuelist.sort()
     valuelist.reverse()
-    for key in valuelist:
-        window.Log("id: %s is located at: 0x%08x" % (tebArray[key],key), key)
+    if len(valuelist) == 1:
+        window.Log("(!) There is only 1 thread running (the current TEB)")
+    else:
+        window.Log("(+) There are %d number of threads in this process" % len(valuelist))
+        window.Log("(+) Other TEB's in this process:")
+        for key in valuelist:
+            window.Log("(+) ID: %s is located at: 0x%08x" % (tebArray[key],key), key)
     return "Dumped TEB successfully"
     
 def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
@@ -1541,28 +1675,37 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
         for a in range(block.BaseIndex, num_of_freelists): # num_of_freelists
             entry= block.FreeList[a]
             e=entry[0]
+            first_entry = entry[0]
             nodes = []
             overwrite_flink_blink = False
             overwrite_size = False
             if e[0]:
-                chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a+block.BaseIndex)
-                window.Log("Bin[0x%04x]    0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (a+block.BaseIndex, e[0], e[1], e[2]), address = e[0])
-                
+                #chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a+block.BaseIndex)
+ 
                 # logic to detect overwrite via the size (decode the header on the fly)
                 encoded_header = imm.readMemory(e[0]-0x8,0x4)
                 (encoded_header) = struct.unpack("L", encoded_header) 
                 result = "%x" % (encoded_header[0] ^ pheap.EncodingKey)
-                if int(result[len(result)-4:len(result)],16) != a+block.BaseIndex:
+                # chunks of size 0x7f or 0x7ff (FreeList[0] will NOT have their size validated for obvious reasons...)
+                if (int(result[len(result)-4:len(result)],16) != a+block.BaseIndex and (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff):
                     window.Log("               -> Detected chunk size overwrite!")
                     overwrite_size = True
                     if e[1] == e[2]:
                         overwrite_flink_blink = True
                         window.Log("               -> Detected the flink/blink to be overwritten as well!") 
-                else:
+                elif (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff:
                     window.Log("Chunk:         0x%08x has had its size validated correctly" % e[0])
                     if e[1] == e[2]:
                         overwrite_flink_blink = True
                         window.Log("               -> Detected flink/blink overwrite without overewriting the size!? Do you have a 4-n byte write!?")                    
+
+                if (int(a+block.BaseIndex) != 0x7f and int(a+block.BaseIndex) != 0x7ff):
+                    chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a+block.BaseIndex)  
+ 
+                # we have to get the calculated size if its like FreeList[0]...
+                elif (int(a+block.BaseIndex) == 0x7f or int(a+block.BaseIndex) == 0x7ff):      
+                    chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],int(result[len(result)-4:len(result)],16))
+                window.Log("Bin[0x%04x]    0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (a+block.BaseIndex, e[0], e[1], e[2]), address = e[0])
 
                 if graphic_structure:
                     if overwrite_flink_blink and not overwrite_size:
@@ -1572,35 +1715,40 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
                     elif not overwrite_flink_blink and not overwrite_size:
                         nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
                     
-                
-                for e in entry[1:]:
-                    chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a+block.BaseIndex)
-                    window.Log("               0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (e[0], e[1], e[2]), address= e[0])    
-                    
-                    # logic to detect overwrite via the size (decode the header on the fly)
-                    encoded_header = imm.readMemory(e[0]-0x8,0x4)
-                    (encoded_header) = struct.unpack("L", encoded_header) 
-                    result = "%x" % (encoded_header[0] ^ pheap.EncodingKey)
-                    if int(result[len(result)-4:len(result)],16) != a+block.BaseIndex:
-                        window.Log("    -> Detected chunk size overwrite!")
-                        overwrite_size = True
-                        if e[1] == e[2]:
-                            window.Log("               -> Detected the flink/blink to be overwritten as well!")
-                            overwrite_flink_blink = True
-                    else:
-                        window.Log("Chunk:         0x%08x has had its size validated correctly" % e[0])
-                        if e[1] == e[2]:
-                            window.Log("    -> Detected flink/blink overwrite without overewriting the size!? Do you have a 4-n byte write!?")                         
-                            overwrite_flink_blink = True
-                        
-                    if graphic_structure:
-                        if overwrite_flink_blink and not overwrite_size:
-                            nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nflink/blink are owned!", fillcolor="red"))
-                        elif overwrite_flink_blink and overwrite_size:
-                            nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nsize and flink/blink are owned!", fillcolor="red"))
-                        elif not overwrite_size and not overwrite_flink_blink:
-                            nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
-                            
+                # if more than one entries exists, loop over them and add them...
+                if len(entry[1:]) > 1:
+                    for e in entry[1:]:
+                        # logic to detect overwrite via the size (decode the header on the fly)
+                        encoded_header = imm.readMemory(e[0]-0x8,0x4)
+                        (encoded_header) = struct.unpack("L", encoded_header) 
+                        result = "%x" % (encoded_header[0] ^ pheap.EncodingKey)
+                        if (int(result[len(result)-4:len(result)],16) != a+block.BaseIndex and (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff):
+                            window.Log("    -> Detected chunk size overwrite!")
+                            overwrite_size = True
+                            if e[1] == e[2]:
+                                window.Log("               -> Detected the flink/blink to be overwritten as well!")
+                                overwrite_flink_blink = True
+                        elif (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff:
+                            window.Log("Chunk:         0x%08x has had its size validated correctly" % e[0])
+                            if e[1] == e[2]:
+                                window.Log("    -> Detected flink/blink overwrite without overewriting the size!? Do you have a 4-n byte write!?")                         
+                                overwrite_flink_blink = True
+                        if (int(a+block.BaseIndex) != 0x7f and (int(a+block.BaseIndex)) != 0x7ff):
+                            chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a+block.BaseIndex)    
+                        # we have to get the calculated size if its like FreeList[0]...
+                        elif (int(a+block.BaseIndex) == 0x7f and int(a+block.BaseIndex) == 0x7ff):
+                            chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],int(result[len(result)-4:len(result)],16))
+                        window.Log("               0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (e[0], e[1], e[2]), address= e[0])                          
+                                     
+                        if graphic_structure:
+                            # as long as the first entry is not the same as the already added node..
+                            if first_entry[0] != e[0]:
+                                if overwrite_flink_blink and not overwrite_size:
+                                    nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nflink/blink are owned!", fillcolor="red"))
+                                elif overwrite_flink_blink and overwrite_size:
+                                    nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nsize and flink/blink are owned!", fillcolor="red"))
+                                elif not overwrite_size and not overwrite_flink_blink:
+                                    nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))    
             if graphic_structure:
                 if a not in list_hint_dict:
                     list_hint_dict[a] = nodes
@@ -1619,8 +1767,10 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
         if graphic_structure:
             k = 0
             for listhintnode in ListHint_nodes.keys():
-                nodes_to_add = list_hint_dict[listhintnode]
+                
+                nodes_to_add = list_hint_dict[k]
                 if len(nodes_to_add) > 0:
+                    
                     if k not in chunk_nodes:
                         chunk_nodes.append(k)
                         
@@ -1639,6 +1789,7 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
                     j = 0
                     for node in nodes_to_add:
                         listhintgraph.add_node(node)
+                        
                         if j+1 <= len(nodes_to_add)-1:
                             edge = pydot.Edge(node, nodes_to_add[j+1])
                             node_list.append(node)
@@ -2091,11 +2242,24 @@ def analyse_heap(heap, imm, window):
 # ==========
 def main(args):
     imm = immlib.Debugger()
-    if not args:
-        banner(imm)
-        return usage(imm)
-    banner(imm)
     
+    if not opennewwindow:            
+        window = imm.getKnowledge(tag)
+        if window and not window.isValidHandle():
+            imm.forgetKnowledge(tag)
+            del window
+            window = None
+        
+        if not window:
+            window = imm.createTable("Heaper - by mr_me", ["Address", "Information"])
+            imm.addKnowledge(tag, window, force_add = 1)
+        #win_banner(window)
+        
+    if not args:
+        win_banner(window)
+        return usage(window, imm)
+    win_banner(window)
+         
     if len(args) > 1:
         cmds = set_up_usage()
         
@@ -2105,37 +2269,24 @@ def main(args):
             if args[1].lower().strip() in available_commands:
                 usageText = cmds[args[1].lower().strip()].usage.split("\n")
                 for line in usageText:
-                    imm.log(line)
+                    window.Log(line)
                 return "(+) Good luck!"
             else:
-                usage(imm)
+                usage(window, imm)
                 return "(-) Invalid command specified!"
-    
-    if len(args) >= 1:
-        if not opennewwindow:            
-            window = imm.getKnowledge(tag)
-            if window and not window.isValidHandle():
-                imm.forgetKnowledge(tag)
-                del window
-                window = None
-        
-            if not window:
-                window = imm.createTable("Heaper - by mr_me", ["Address", "Information"])
-                imm.addKnowledge(tag, window, force_add = 1)
-        win_banner(window)
         
     # commands that only require one argument
     # =======================================
     if len(args) == 1:
         if args[0].lower().strip() in available_commands:
             if args[0].lower().strip() == "dumpheaps" or args[0].lower().strip() == "dh":
-                return dump_heap(imm)
+                return dump_heap(imm, window)
             elif args[0].lower().strip() == "dumppeb" or args[0].lower().strip() == "dp":
                 return dump_peb(imm,window)
             elif args[0].lower().strip() == "dumpteb" or args[0].lower().strip() == "dt":
                 return dump_teb(imm,window)
             elif args[0].lower().strip() == "help" or args[0].lower().strip() == "-h":
-                return usage(imm)
+                return usage(window, imm)
             # update functionality
             elif args[0].lower().strip() == "update" or args[0].lower().strip() == "u":
                 
@@ -2168,6 +2319,7 @@ def main(args):
                     return "(!) This version is the latest version..."
   
             # dump function pointers from the parent processes .data segment
+            # TODO: dump function pointers from dlls too
             elif args[0].lower().strip() == "dumpfunctionpointers" or args[0].lower().strip() == "dfp":
                 writable_segment = 0x00000000
                 writable_segment_size = 0x0
@@ -2183,6 +2335,7 @@ def main(args):
                 window.Log("Dumping function pointers from the %s process" % imm.getDebuggedName())
                 window.Log("-" * 60)
                 dump_function_pointers(window, imm, writable_segment)
+                
             else:
                 return "(-) Invalid number of arguments"
         else:
@@ -2197,6 +2350,12 @@ def main(args):
         if args[0].lower().strip() == "dumppeb" or args[0].lower().strip() == "dp":
                 if args[1] == "-m":
                     dump_peb(imm,window,True)
+                    
+        elif args[0].lower().strip() == "patch" or args[0].lower().strip() == "p":
+            if args[1].lower().strip() == "peb":
+                window.Log("")
+                if patch_PEB(imm,window):
+                    return "(+) Patching complete!"
                     
         # commands that require use of a heap
         # ===================================
@@ -2227,7 +2386,7 @@ def main(args):
                     return "Invalid heap address"
                 if imm.getOsVersion() == "xp":
                     analyse_heap(heap, imm, window)
-                else:
+                elif imm.getOsVersion() == "7":
                     window.Log("TODO: dump the heap structure under win7")
                     window.Log("also add support to dump _LFH_HEAP and a few other structures")
                     
@@ -2236,7 +2395,7 @@ def main(args):
             # TODO: change to analyse front end
             # runtime to detect if we are using LFH or lookaside
             
-            elif args[0].lower().strip() == "analyselal" or args[0].lower().strip() == "al":
+            elif args[0].lower().strip() == "analysefrontend" or args[0].lower().strip() == "af":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
                 except:
@@ -2252,7 +2411,7 @@ def main(args):
                         dump_lal(imm, pheap, graphic_structure, window, filename)
                     else:
                         dump_lal(imm, pheap, graphic_structure, window)
-                else:
+                elif imm.getOsVersion() == "7":
                     window.Log("Lookaside list analyse not supported under Windows Vista and above")
             
             # analyse freelists
