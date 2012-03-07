@@ -2375,7 +2375,8 @@ def main(args):
                     return "(!) This version is the latest version..."
   
             # dump function pointers from the parent processes .data segment
-            # TODO: dump function pointers from dlls too
+            # TODO: dump function pointers from dlls as well
+            
             elif args[0].lower().strip() == "dumpfunctionpointers" or args[0].lower().strip() == "dfp":
                 writable_segment = 0x00000000
                 writable_segment_size = 0x0
@@ -2474,8 +2475,7 @@ def main(args):
             
             # analyse freelists
             # =================
-            # TODO: change to analyse back end
-            # runtime to detect the ListHint or FreeList
+            # runtime to detect the ListHint and FreeList
             
             elif args[0].lower().strip() == "analysebackend" or args[0].lower().strip() == "ab":
                 try:
@@ -2516,7 +2516,6 @@ def main(args):
                         window.Log("-----------------")
                         dump_HeapCache_bitmap(pheap, window)
 
-                # do vista and windows 7 freelist analyse?
                 else:
                     if graphic_structure:
                         if custfilename:
@@ -2577,6 +2576,7 @@ def main(args):
             # analyse FreelistInUse
             # =====================
             # TODO: change to detect xp or win7
+            # check to see if this works under win7
             elif args[0].lower().strip() == "freelistinuse" or args[0].lower().strip() == "fliu":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -2755,6 +2755,8 @@ def main(args):
                                 AllocFlag = True
                             elif args[3].lower().strip() == "free":
                                 FreeFlag = True
+                            # zmfg you didnt just hook all did you!?
+                            # thats every call for a specfic heap...
                             elif args[3].lower().strip() == "all":
                                 # hook everything!
                                 AllocFlag = True
@@ -2804,6 +2806,7 @@ def main(args):
                             DeleteCSFlag = True
                           
                         # zmfg you didnt just hook all did you!?
+                        # thats all calls for all heaps
                         elif args[2].lower().strip() == "all":
                                     AllocFlag = True
                                     FreeFlag = True
@@ -2823,7 +2826,7 @@ def main(args):
                         window.Log("(-) Please specify a function to hook/unhook using -h/-u")
                         return "(-) Please specify a function to hook/unhook using -h/-u"
                 
-                # display the hook..
+                # display the hooks..
                 window.Log("-" * 30)
                 if AllocFlag:
                     allocaddr = imm.getAddress("ntdll.RtlAllocateHeap" )
@@ -2843,7 +2846,8 @@ def main(args):
                     else:
                         hook_output = ("(+) %s RtlFreeHeap()" % 
                         (hook_on(imm, FREELABEL, freeaddr, "RtlFreeHeap", retaddr, Disable, window)))                        
-                # I suppose I could tidy this up...
+                
+                # I suppose I could tidy this up in the future
                 if CreateFlag:
                     # basically, I use both the wrapper function and core api so I can easily
                     # determine the 'caller', a bit lazy I know, but hell. You aint paying for this.
@@ -2851,7 +2855,7 @@ def main(args):
                     ret_address = imm.getAddress("ntdll.RtlCreateHeap" )
                     
                     if imm.getOsVersion() == "xp":
-                        retaddr = ret_address+0x4e2
+                        retaddr = ret_address+0x42e
                         hook_output = ("(+) %s HeapCreate()" % 
                         (hook_on(imm, CREATELABEL, createaddr, "RtlCreateHeap", retaddr, Disable, window)))
                     # if using winodws 7, lets get the ntdll!RtlpHeapGenerateRandomValue64 calculated value
