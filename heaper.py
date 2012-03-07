@@ -233,6 +233,11 @@ def reverse(text):
 # patch the PEB
 # thanks to BoB from Team PEiD
 def patch_PEB(imm, window):
+    peb_struct = imm.getPEB()
+    if not peb_struct.BeingDebugged and not peb_struct.NtGlobalFlag:
+        window.Log("(!) This process has already been patched!")
+        window.Log("------------------------------------------")
+        return False
     PEB = imm.getPEBAddress()
     # Just incase .. ;)
     if PEB == 0:
@@ -266,6 +271,7 @@ def patch_PEB(imm, window):
                 a += 7
         except:
             break
+    window.Log("----------------------------------------")
     return True
         
 
@@ -287,7 +293,6 @@ class set_command:
         self.alias = alias
 
 # RtlFreeHeap Hook class
-# update for WIN7 heap (rendomized)
 class function_hook(LogBpHook):
     """
     Class to get the particular functions arguments for a debug instance
@@ -320,7 +325,8 @@ class function_hook(LogBpHook):
         module_list = imm.getAllModules()
         for mod in module_list.iterkeys():
             find = False
-            for addy in range(module_list[mod].getCodebase(),(module_list[mod].getCodebase()+module_list[mod].getCodesize())):
+            # make sure we cycle through the IAT (import database)
+            for addy in range(module_list[mod].getCodebase(),module_list[mod].getIdatabase()):
                 if int(ret[0]) == addy:
                     find = True
                     break
@@ -355,10 +361,11 @@ class function_hook(LogBpHook):
         elif self.fname == "RtlCreateHeap":
             res=imm.readMemory( regs['ESP'] + 4, 0xc)
             if len(res) != 0xc:
-                self.window.Log("(-) RtlFreeHeap: the stack seems to broken, unable to get args")
+                self.window.Log("(-) RtlCreateHeap: the stack seems to broken, unable to get args")
                 return 0x0
             (flags, InitialSize, MaximumSize) = struct.unpack("LLL", res)
-            self.window.Log("(+) RtlCreate(0x%08x, 0x%08x, 0x%08x)" % (flags, InitialSize, MaximumSize))
+            self.window.Log("(+) RtlCreateHeap(0x%08x, 0x%08x, 0x%08x)" % (flags, InitialSize, MaximumSize)) 
+
         elif self.fname == "RtlDestroyHeap":
             res=imm.readMemory( regs['ESP'] + 4, 0x4)
             if len(res) != 0x4:
@@ -410,16 +417,20 @@ class function_hook(LogBpHook):
                 return 0x0
             (lpAddress, dwSize, dwFreeType) = struct.unpack("LLL", res)
             self.window.Log("(+) VirtualFreeEx(0x%08x, 0x%08x, 0x%08x)" % (lpAddress, dwSize, dwFreeType))
-        if self.heap:
-            if self.heap == self.rheap:    
-                self.window.Log("(+) Called from 0x%08x - module: %s" % (ret[0],module_list[mod].getPath()))
-        else:
-            self.window.Log("(+) Called from 0x%08x - module: %s" % (ret[0],module_list[mod].getPath()))
+        
+        if find:
+            if self.heap:
+                if self.heap == self.rheap:    
+                    self.window.Log("(+) Called from 0x%08x - module: %s" % (ret[0],module_list[mod].getPath()),ret[0])
+            else:
+                self.window.Log("(+) Called from 0x%08x - module: %s" % (ret[0],module_list[mod].getPath()),ret[0])
+        elif not find:
+            self.window.Log("(+) Called from 0x%08x - from an unknown module" % (ret[0]),ret[0])
 
     def is_heap_alloc_free_matching(self):
         return self.heap == self.rheap
             
-class function_hook_ret(LogBpHook):
+class function_hook_return(LogBpHook):
     def __init__(self, window, function_name, heap=False):
         LogBpHook.__init__(self)
         self.window = window
@@ -431,14 +442,25 @@ class function_hook_ret(LogBpHook):
         # our flag is set for each call
         if rheap:
             return_value = regs['EAX']
-            self.window.Log("(+) %s() returned: 0x%08x" % (self.fname, return_value)) 
-        else:
-            self.window.Log("(+) Detected alternate %s() call" % (self.fname))
+            self.window.Log("(+) %s() returned: 0x%08x" % (self.fname, return_value))
+        self.window.Log("-" * 30)
+
+class function_hook_seed(LogBpHook):
+    def __init__(self, window, function_name, heap=False):
+        LogBpHook.__init__(self)
+        self.window = window
+        self.fname = function_name
+        self.heap = heap
         
+    def run(self,regs):
+        """This will be executed when hooktype happens"""
+        # our flag is set for each call
+        return_value = regs['EAX']
+        self.window.Log("(+) %s() returned random seed value: 0x%08x" % (self.fname, return_value)) 
         self.window.Log("-" * 30)
 
 # HeapHook_vals, HeapHook_ret,         
-def hook_on(imm, LABEL, bp_address, function_name, bp_retaddress, Disable, window, heap=False):
+def hook_on(imm, LABEL, bp_address, function_name, bp_retaddress, Disable, window, heap=False, seed_address=False):
     """
     this function creates the hooks and adds/deletes them to the instance of immdbg depending on
     if they exist in immunities knowledge database
@@ -461,46 +483,90 @@ def hook_on(imm, LABEL, bp_address, function_name, bp_retaddress, Disable, windo
         
     hook_values = imm.getKnowledge( LABEL + "%x_values" % heap)
     hook_ret_address = imm.getKnowledge( LABEL + "%x_ret" % heap)
+    if imm.getOsVersion() == "7":
+        hook_seed = imm.getKnowledge( LABEL + "%x_seed" % heap)
+        
     if Disable:
         if not hook_values:
-            window.Log("(-) Error %s: No hook to disable!" % (LABEL))
-            return "(-) No hook to disable on"
-        elif not hook_ret_address:
-            window.Log("(-) Error %s: No hook to disable!" % (LABEL))
-            return "(-) No hook to disable on"
-        else:
+            window.Log("(-) Error %s, no hook to disable for the API" % (LABEL))
+            #return "No hook to disable on"
+        if not hook_ret_address:
+            window.Log("(-) Error %s, no hook to disable for the return address!" % (LABEL))
+            # if its debugged under windows xp, return from here
+            if imm.getOsVersion() != "7":
+                return "No hook to disable on"
+        if imm.getOsVersion() == "7" and not hook_seed:
+            window.Log("(-) Error %s, no hook to disable for the random seed value!" % (LABEL))
+            return "No hook to disable on"            
+        
+        elif hook_values or hook_ret_address or hook_seed:
             hook_values.UnHook()
             hook_ret_address.UnHook()
-            window.Log("(+) UnHooked %s" % LABEL)
+            window.Log("(+) Unhooked %s" % LABEL)
             imm.forgetKnowledge( LABEL + "%x_values" % heap)
             imm.forgetKnowledge( LABEL + "%x_ret" % heap)
+            if imm.getOsVersion() == "7" and hook_seed: 
+                imm.forgetKnowledge( LABEL + "%x_seed" % heap)
             return "Unhooked"
-    else:
+    # else we are not disabling...
+    elif not Disable:
         if not hook_values:
             if heap != 0:
                 hook_values= function_hook( window, function_name, heap)
             else:
                 hook_values= function_hook( window, function_name)
-                
-            #window.Log("match? %s" % hook_values.is_heap_alloc_free_matching())
             
             hook_values.add( LABEL + "%x_values" % heap, bp_address)
             window.Log("(+) Placed %s to retrieve the variables" % LABEL)
-            
             imm.addKnowledge( LABEL + "%x_values" % heap, hook_values)
-        else:
-            window.Log("(?) HookAlloc for heap 0x%08x is already running")
-        if not hook_ret_address:
-            if heap != 0:   
-                hook_ret_address= function_hook_ret( window, function_name, heap)
+        elif hook_values:
+            if heap != 0:
+                window.Log("(!) %s for heap 0x%08x was ran previously, re-hooking" % (LABEL,heap))
+                hook_values= function_hook( window, function_name, heap)
             else:
-                hook_ret_address= function_hook_ret( window, function_name)
-            hook_ret_address.add( LABEL + "_ret", bp_retaddress)
+                window.Log("(!) %s was ran previously, re-hooking" % (LABEL))
+                hook_values= function_hook( window, function_name)
+            hook_values.add( LABEL + "%x_values" % heap, bp_address)
+        
+        if imm.getOsVersion() == "7" and not hook_seed:
+            if heap != 0:
+                hook_seed = function_hook_seed( window, function_name, heap)
+            else:
+                hook_seed = function_hook_seed( window, function_name)
+                
+            hook_seed.add( LABEL + "%x_seed" % heap, seed_address)
+            window.Log("(+) Placed %s to retrieve the seed value" % LABEL)
+            imm.addKnowledge( LABEL + "%x_seed" % heap, hook_seed)
             
+        elif imm.getOsVersion() == "7" and hook_seed:
+            if heap != 0:
+                window.Log("(!) %s for the seed value on heap 0x%08x was ran previously, re-hooking" % (LABEL,heap))
+                hook_seed = function_hook_seed( window, function_name, heap)
+            else:
+                #window.Log("LABEL: %s" % LABEL)
+                window.Log("(!) %s for the seed value was ran previously, re-hooking" % (LABEL))
+                hook_seed = function_hook_seed( window, function_name)
+            hook_seed.add( LABEL + "%x_seed" % heap, seed_address)
+            #TODO
+            
+        if not hook_ret_address:
+            if heap != 0:
+                hook_ret_address = function_hook_return( window, function_name, heap)
+            else:
+                hook_ret_address = function_hook_return( window, function_name)
+            hook_ret_address.add( LABEL + "%x_ret" % heap, bp_retaddress)
             window.Log("(+) Placed %s to retrieve the return value" % LABEL)
             imm.addKnowledge( LABEL + "%x_ret" % heap, hook_ret_address )            
         else:
-            window.Log("(?) HookAlloc is already running")
+            if heap != 0:
+                window.Log("(!) %s for the return address on heap 0x%08x was ran previously, re-hooking" % (LABEL,heap))
+                hook_ret_address= function_hook_return( window, function_name, heap)
+            elif heap == 0:
+                window.Log("(!) %s for the return address was ran previously, re-hooking" % (LABEL))
+                hook_ret_address= function_hook_return( window, function_name)
+            #hook_ret_address.add( LABEL + "_ret", bp_retaddress)
+            hook_ret_address.add( LABEL + "%x_ret" % heap, bp_retaddress)
+            
         return "Hooked"
 
 # banner
@@ -1627,11 +1693,8 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
         for a in range(0, num_of_freelists):
             # Previous and Next Chunk of the head of the double linked list
             (flink, heap_bucket) = struct.unpack("LL", memory[a * 0x8 : a * 0x8 + 0x8] )
-
             bin_entry = a + block.BaseIndex
-
             freelist_addr = block.ListHints + (bin_entry - block.BaseIndex) * 8
-            
             allocations = heap_bucket & 0x0000FFFF
             allocations = allocations / 2
             # if we have had a allocation, then there should only be 17 to go
@@ -1680,8 +1743,7 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
             overwrite_flink_blink = False
             overwrite_size = False
             if e[0]:
-                #chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a+block.BaseIndex)
- 
+                window.Log("Bin[0x%04x]    0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (a+block.BaseIndex, e[0], e[1], e[2]), address = e[0])
                 # logic to detect overwrite via the size (decode the header on the fly)
                 encoded_header = imm.readMemory(e[0]-0x8,0x4)
                 (encoded_header) = struct.unpack("L", encoded_header) 
@@ -1705,8 +1767,7 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
                 # we have to get the calculated size if its like FreeList[0]...
                 elif (int(a+block.BaseIndex) == 0x7f or int(a+block.BaseIndex) == 0x7ff):      
                     chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],int(result[len(result)-4:len(result)],16))
-                window.Log("Bin[0x%04x]    0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (a+block.BaseIndex, e[0], e[1], e[2]), address = e[0])
-
+                
                 if graphic_structure:
                     if overwrite_flink_blink and not overwrite_size:
                         nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nflink/blink are owned!", fillcolor="red"))
@@ -1752,7 +1813,6 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
             if graphic_structure:
                 if a not in list_hint_dict:
                     list_hint_dict[a] = nodes
-                    
                 # no matter how many allocations, you will never trigger LFH
                 if a == 127:
                     list_data = "ListHint[0x%x]\nNo amount of allocations will\ntrigger LFH for this bin" % (a) 
@@ -2356,6 +2416,8 @@ def main(args):
                 window.Log("")
                 if patch_PEB(imm,window):
                     return "(+) Patching complete!"
+                else:
+                    return "(-) This processes PEB has already been patched!"
                     
         # commands that require use of a heap
         # ===================================
@@ -2663,12 +2725,26 @@ def main(args):
             elif args[0].lower().strip() == "analysesegments" or args[0].lower().strip() == "as":
                 pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
                 dump_segment_structure(pheap, window, imm, heap)
-                
+            
+            # hook heap API
+            # =============
             elif args[0].lower().strip() == "hook" or args[0].lower().strip() == "h":
                 window.Log("")
                 valid_functions = ["alloc", "free", "create","destroy","realloc","size","createcs","deletecs","all","setuef"]
-
-                
+                # set the flags
+                FilterHeap = False
+                Disable = False
+                AllocFlag = False
+                FreeFlag = False
+                CreateFlag = False
+                DestroyFlag = False
+                ReAllocFlag = False
+                sizeFlag = False
+                CreateCSFlag = False
+                DeleteCSFlag = False
+                setuefFlag = False
+                setVAllocFlag = False
+                setVFreeFlag = False
                 if len(args) > 2:
                     # !heaper command <heap> -h <func>
                     if (args[2].lower().strip() == "-h" or args[2].lower().strip() == "-u"):
@@ -2684,6 +2760,7 @@ def main(args):
                             elif args[3].lower().strip() == "free":
                                 FreeFlag = True
                             elif args[3].lower().strip() == "all":
+                                # hook everything!
                                 AllocFlag = True
                                 FreeFlag = True
                                 CreateFlag = True
@@ -2700,7 +2777,7 @@ def main(args):
                     elif (args[1].lower().strip() == "-h" or args[1].lower().strip() == "-u"):
                         # just set it on the default heap if the user fails
                         # to supply a heap address
-                        
+                        heap = False
                         if args[1].lower().strip() == "-u":
                             Disable = True
                         
@@ -2748,7 +2825,6 @@ def main(args):
                             window.Log("(-) Please include a valid heap for this hook!")
                             return "(-) Please include a valid heap for this hook!"
                     else:
-                        window.Log("%d" % len(args))
                         window.Log("(-) Please specify a function to hook/unhook using -h/-u")
                         return "(-) Please specify a function to hook/unhook using -h/-u"
                 
@@ -2774,10 +2850,23 @@ def main(args):
                         (hook_on(imm, FREELABEL, freeaddr, "RtlFreeHeap", retaddr, Disable, window)))                        
                 if CreateFlag:
                     # we dont hook ntdll.RtlCreateHeap because its not simply a wrapper...
+                    
                     createaddr = imm.getAddress("kernel32.HeapCreate" )
-                    retaddr = createaddr+0x57
-                    hook_output = ("(+) %s HeapCreate() for heap 0x%08x" % 
-                    (hook_on(imm, CREATELABEL, createaddr, "RtlCreateHeap", retaddr, Disable, window), 0))
+                    
+                    if imm.getOsVersion() == "xp":
+                        retaddr = createaddr+0x57
+                        hook_output = ("(+) %s HeapCreate()" % 
+                        (hook_on(imm, CREATELABEL, createaddr, "RtlCreateHeap", retaddr, Disable, window)))
+                    # if using winodws 7, lets get the ntdll!RtlpHeapGenerateRandomValue64 calculated value
+                    # and set the ret offset correctly
+                    elif imm.getOsVersion() == "7":
+                        retaddr = createaddr+0x61
+                        #retaddr = createaddr+0x536
+                        seed_address_hook = imm.getAddress("ntdll.RtlCreateHeap") + 0x1b0
+                        hook_output = ("(+) %s HeapCreate()" % 
+                        (hook_on(imm, CREATELABEL, createaddr, "RtlCreateHeap", retaddr, Disable, window, heap, seed_address_hook)))
+                        #seed_address                      
+                
                 if DestroyFlag:
                     destoryaddr = imm.getAddress("ntdll.RtlDestroyHeap")
                     retaddr = destoryaddr+0xd9
@@ -2821,12 +2910,17 @@ def main(args):
                     retaddr = setvf_addr+0x3d
                     hook_output = ("(+) %s VirtualFreeEx() for heap 0x%08x" % 
                     (hook_on(imm, VIRFREELABEL, setvf_addr, "VirtualFreeEx", retaddr, Disable, window), 0))                      
-                                
-                window.Log(hook_output)
-                window.Log("-" * 30)                    
-                return hook_output                    
+                try:            
+                    window.Log(hook_output)
+                    window.Log("-" * 30)
+                    return hook_output
+                except:
+                    usageText = cmds["hook"].usage.split("\n")
+                    for line in usageText:
+                        window.Log(line)                 
+                                    
                             
         # more than one command and that we cant understand
         # =================================================
         else:
-            return usage(imm)
+            return usage(window,imm)
