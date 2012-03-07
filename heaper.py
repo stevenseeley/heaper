@@ -2827,10 +2827,14 @@ def main(args):
                         return "(-) Please specify a function to hook/unhook using -h/-u"
                 
                 # display the hooks..
+                # try and find a API that will automatically get the last opcode of a function..
                 window.Log("-" * 30)
                 if AllocFlag:
                     allocaddr = imm.getAddress("ntdll.RtlAllocateHeap" )
-                    retaddr = allocaddr+0x117
+                    if imm.getOsVersion() == "xp":
+                        retaddr = allocaddr+0x117
+                    elif imm.getOsVersion() == "7":
+                        retaddr = allocaddr+0xe6
                     if FilterHeap:
                         hook_output = ("(+) %s RtlAllocateHeap() for heap 0x%08x" % 
                         (hook_on(imm, ALLOCLABEL, allocaddr, "RtlAllocateHeap", retaddr, Disable, window, heap), heap))
@@ -2839,7 +2843,10 @@ def main(args):
                         (hook_on(imm, ALLOCLABEL, allocaddr, "RtlAllocateHeap", retaddr, Disable, window)))                      
                 if FreeFlag:
                     freeaddr = imm.getAddress("ntdll.RtlFreeHeap" )
-                    retaddr = freeaddr+0x130
+                    if imm.getOsVersion() == "xp":
+                        retaddr = freeaddr+0x130
+                    elif imm.getOsVersion() == "7":
+                        retaddr = freeaddr+0x99
                     if FilterHeap:
                         hook_output = ("(+) %s RtlFreeHeap() for heap 0x%08x" % 
                         (hook_on(imm, FREELABEL, freeaddr, "RtlFreeHeap", retaddr, Disable, window, heap), heap))
@@ -2872,45 +2879,72 @@ def main(args):
                 
                 if DestroyFlag:
                     destoryaddr = imm.getAddress("ntdll.RtlDestroyHeap")
-                    retaddr = destoryaddr+0xd9
+                    if imm.getOsVersion() == "xp":
+                        retaddr = destoryaddr+0xd9
+                    elif imm.getOsVersion() == "7":
+                        retaddr = destoryaddr+0xdc
                     hook_output = ("(+) %s RtlDestroyHeap() for heap 0x%08x" % 
                     (hook_on(imm, DESTROYLABEL, destoryaddr, "RtlDestroyHeap", retaddr, Disable, window), 0))
                 if ReAllocFlag:
                     reallocaddr = imm.getAddress("ntdll.RtlReAllocateHeap")
-                    retaddr = reallocaddr+0x20a
+                    if imm.getOsVersion() == "xp":
+                        retaddr = reallocaddr+0x20a
+                    elif imm.getOsVersion() == "7":
+                        retaddr = reallocaddr+0x98
                     hook_output = ("(+) %s RtlReAllocateHeap() for heap 0x%08x" % 
                     (hook_on(imm, REALLOCLABEL, reallocaddr, "RtlReAllocateHeap", retaddr, Disable, window), 0))
                 if sizeFlag:
                     sizeaddr = imm.getAddress("ntdll.RtlSizeHeap")
-                    retaddr = sizeaddr+0x62
+                    if imm.getOsVersion() == "xp":
+                        retaddr = sizeaddr+0x62
+                    elif imm.getOsVersion() == "7":
+                        retaddr = sizeaddr+0xae
                     hook_output = ("(+) %s RtlSizeHeap() for heap 0x%08x" % 
                     (hook_on(imm, SIZELABEL, sizeaddr, "RtlSizeHeap", retaddr, Disable, window), 0))
                 if CreateCSFlag:
                     create_cs_addr = imm.getAddress("ntdll.RtlInitializeCriticalSection")
-                    retaddr = create_cs_addr+0x10
+                    if imm.getOsVersion() == "xp":
+                        retaddr = create_cs_addr+0x10
+                    elif imm.getOsVersion() == "7":
+                        retaddr = create_cs_addr+0x13
                     hook_output = ("(+) %s RtlInitializeCriticalSection() for heap 0x%08x" % 
                     (hook_on(imm, CREATECSLABEL, create_cs_addr, "RtlInitializeCriticalSection", retaddr, Disable, window), 0))
                 if DeleteCSFlag:
                     delete_cs_addr = imm.getAddress("ntdll.RtlDeleteCriticalSection")
-                    retaddr = delete_cs_addr+0x78
+                    if imm.getOsVersion() == "xp":
+                        retaddr = delete_cs_addr+0x78
+                    elif imm.getOsVersion() == "7":
+                        retaddr = delete_cs_addr+0xef
                     hook_output = ("(+) %s RtlDeleteCriticalSection() for heap 0x%08x" % 
                     (hook_on(imm, DELETECSLABEL, delete_cs_addr, "RtlDeleteCriticalSection", retaddr, Disable, window), 0))                    
                 if setuefFlag:
                     setuef_addr = imm.getAddress("kernel32.SetUnhandledExceptionFilter")
                     # no worries if you dont return here, it just wont log the return address
-                    retaddr = setuef_addr-0x34707
-                    hook_output = ("(+) %s SetUnhandledExceptionFilter() for heap 0x%08x" % 
-                    (hook_on(imm, SETUEFLABEL, setuef_addr, "SetUnhandledExceptionFilter", retaddr, Disable, window), 0))                      
+                    # no use under windows 7 atm
+                    if imm.getOsVersion() == "xp":
+                        retaddr = setuef_addr-0x34707
+                        hook_output = ("(+) %s SetUnhandledExceptionFilter() for heap 0x%08x" % 
+                        (hook_on(imm, SETUEFLABEL, setuef_addr, "SetUnhandledExceptionFilter", retaddr, Disable, window), 0))                      
+                    elif imm.getOsVersion() == "7":
+                        window.Log("(-) Hooking SetUnhandledExceptionFilter is unsupported under windows 7")
+                        return "(-) Hooking SetUnhandledExceptionFilter is unsupported under windows 7"
+                
                 if setVAllocFlag:
                     setva_addr = imm.getAddress("kernel32.VirtualAllocEx")
                     # no worries if you dont return here, it just wont log the return address
-                    retaddr = setva_addr+0x47
+                    if imm.getOsVersion() == "xp":
+                        retaddr = setva_addr+0x47
+                    elif imm.getOsVersion() == "7":
+                        retaddr = setva_addr+0x101
                     hook_output = ("(+) %s VirtualAllocEx() for heap 0x%08x" % 
                     (hook_on(imm, VIRALLOCLABEL, setva_addr, "VirtualAllocEx", retaddr, Disable, window), 0))                      
                 if setVFreeFlag:
                     setvf_addr = imm.getAddress("kernel32.VirtualFreeEx")
                     # no worries if you dont return here, it just wont log the return address
-                    retaddr = setvf_addr+0x3d
+                    if imm.getOsVersion() == "xp":
+                        retaddr = setvf_addr+0x3d
+                    elif imm.getOsVersion() == "7":
+                        retaddr = setvf_addr+0xd9
                     hook_output = ("(+) %s VirtualFreeEx() for heap 0x%08x" % 
                     (hook_on(imm, VIRFREELABEL, setvf_addr, "VirtualFreeEx", retaddr, Disable, window), 0))                      
                 try:            
