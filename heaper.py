@@ -596,8 +596,8 @@ def usage(window, imm):
     window.Log("analyseheapcache <heap> / ahc <heap>  : Analyse a particular heap's cache (FreeList[0])")
     window.Log("freelistinuse <heap> / fliu <heap>    : Analyse/patch the FreeListInUse structure")
     window.Log("hook <heap> / h -h <func>             : Hook various functions that create/destroy/manipulate a heap")
-    window.Log("update / u                            : Update to the latest version")
     window.Log("patch <function/data structure> / p   : Patch a function or datastructure")
+    window.Log("update / u                            : Update to the latest version")
     window.Log("exploit <heap> / exp <heap>           : Perform heuristics against the FrontEnd and BackEnd allocators")
     window.Log("                                        to determine exploitable conditions")
     window.Log("")
@@ -649,14 +649,18 @@ def get_extended_usage():
     extusage["analysesegments"] = "\nanalysesegments <heap> / as <heap> : Analyse a particular heap's segment stucture(s)\n"
     extusage["analysesegments"] += "------------------------------------------------------------------------------------\n"   
     extusage["analysesegments"] += "Use -g to view a graphical representation of the heap structure\n"
-    extusage["analyselal"] = "\nanalyselal <heap> / al <heap> : Analyse a particular heap's lookaside list structure\n"
-    extusage["analyselal"] += "------------------------------------------------------------------------------------\n"   
-    extusage["analyselal"] += "Use -g to view a graphical representation of the lookaside\n"
-    extusage["analyselal"] += "Use -f to specify a filename for the graph\n"
-    extusage["analysefreelist"] = "\nanalysefreelist <heap> / af <heap> : Analyse a particular heap's freelist structure\n"
-    extusage["analysefreelist"] += "------------------------------------------------------------------------------------\n"   
-    extusage["analysefreelist"] += "Use -g to view a graphical representation of the freelist\n"
-    extusage["analysefreelist"] += "Use -f to specify a filename for the graph\n"
+    extusage["analysefrontend"] = "\nanalysefrontend <heap> / af <heap> : Analyse a particular heap's frontend free structure\n"
+    extusage["analysefrontend"] += "----------------------------------------------------------------------------------------\n"   
+    extusage["analysefrontend"] += "Use -u to dump the UserBlocks that are activated in the LFH\n"
+    extusage["analysefrontend"] += "Use -c to dump the UserBlockCache structure\n"
+    extusage["analysefrontend"] += "Use -b to dump the _HEAP_BUCKET's in the LFH\n"
+    extusage["analysefrontend"] += "Use -g to view a graphical representation of the LFH\n"
+    extusage["analysefrontend"] += "Use -f to specify a filename for the graph\n"
+    
+    extusage["analysebackend"] = "\nanalysebackend <heap> / ab <heap> : Analyse a particular heap's backend free structure\n"
+    extusage["analysebackend"] += "------------------------------------------------------------------------------------\n"   
+    extusage["analysebackend"] += "Use -g to view a graphical representation of the freelist\n"
+    extusage["analysebackend"] += "Use -f to specify a filename for the graph\n"
     extusage["analysesegments"] = "\nanalysesegment(s) <heap> / as <heap> : Analyse a particular heap's segment structure(s)\n"
     extusage["analysesegments"] += "------------------------------------------------------------------------------------\n"   
     
@@ -702,10 +706,10 @@ def set_up_usage():
     cmds["dfp"] = set_command("dumpfunctionpointers", "Dump all the function pointers of the current process",get_extended_usage()["dumpfunctionpointers"], "dfp")
     cmds["analyseheap"] = set_command("analyseheap", "analyse a particular heap",get_extended_usage()["analyseheap"], "ah")
     cmds["ah"] = set_command("analyseheap", "analyse a particular heap",get_extended_usage()["analyseheap"], "ah")
-    cmds["analyselal"] = set_command("analyselal", "analyse a particular heap's lookaside list",get_extended_usage()["analyselal"], "al")
-    cmds["al"] = set_command("analyselal", "analyse a particular heap's lookaside list",get_extended_usage()["analyselal"], "al")
-    cmds["analysefreelist"] = set_command("analysefreelist", "analyse a particular heap's freelist",get_extended_usage()["analysefreelist"], "af")
-    cmds["af"] = set_command("analysefreelist", "analyse a particular heap's freelist",get_extended_usage()["analysefreelist"], "af")
+    cmds["analysefrontend"] = set_command("analysefrontend", "analyse a particular heap's frontend",get_extended_usage()["analysefrontend"], "af")
+    cmds["af"] = set_command("analyselal", "analyse a particular heap's lookaside list",get_extended_usage()["analysefrontend"], "af")
+    cmds["analysebackend"] = set_command("analysebackend", "analyse a particular heap's backend",get_extended_usage()["analysebackend"], "ab")
+    cmds["ab"] = set_command("analysefreelist", "analyse a particular heap's freelist",get_extended_usage()["analysebackend"], "ab")
     cmds["analysechunks"] = set_command("analysechunks", "analyse a particular heap's list of chunks",get_extended_usage()["analysechunks"], "ac")
     cmds["ac"] = set_command("analysechunks", "analyse a particular heap's list of chunks",get_extended_usage()["analysechunks"], "ac")
     cmds["analysesegments"] = set_command("analysesegments", "analyse a particular heap's segment(s)",get_extended_usage()["analysesegments"], "as")
@@ -934,6 +938,7 @@ def dump_heap(imm, window):
     window.Log("")
     for hndx in imm.getHeapsAddress():
         window.Log("Heap: 0x%08x" % hndx, address = hndx, focus = 1)
+    window.Log("----------------")
     return "(+) Dumped all heaps for the debugged process"      
         
         
@@ -1185,7 +1190,75 @@ def dump_teb(imm, window):
         for key in valuelist:
             window.Log("(+) ID: %s is located at: 0x%08x" % (tebArray[key],key), key)
     return "Dumped TEB successfully"
+
+# LFH dumping function
+# ====================
+
+def dump_lfh(imm, pheap, graphic_structure, window, switch, filename="lfh_graph"):
     
+    # if the user wants, print out all this information
+    if switch["bucket_flag"]:
+        window.Log("")
+        window.Log("(+) Dumping buckets from _HEAP(0x%08x)->_LFH_HEAP(0x%08x)->Buckets(+0x110):" % (pheap.address,pheap.LFH.address))
+        window.Log("")
+        if pheap.LFH.Buckets:    
+            for bucket in pheap.LFH.Buckets:
+                window.Log("bucket[%x] (0x%08x) -> BlockUnits: 0x%x UseAffinity: %x DebugFlags: %x" % (bucket.SizeIndex, bucket.address, bucket.BlockUnits, bucket.UseAffinity, bucket.DebugFlags),bucket.address)
+            
+    if switch["UserBlockCache_flag"]:
+        window.Log("")
+        window.Log("(+) Dumping UserBlockCache from _HEAP(0x%08x)->_LFH_HEAP(0x%08x)->UserBlockCache(+0x50):" % (pheap.address,pheap.LFH.address))
+        window.Log("")
+        if pheap.LFH.UserBlockCache:
+            for cache in pheap.LFH.UserBlockCache:
+                window.Log("Cache: 0x%08x Next: 0x%08x Depth: 0x%x Sequence: 0x%x AvailableBlocks: %d Reserved: 0x%x" % (cache.address, cache.Next, cache.Depth, cache.Sequence, cache.AvailableBlocks, cache.Reserved))
+            
+    if switch["UserBlocks_flag"]:
+    
+        if pheap.LFH.LocalData:
+            for seginfo in pheap.LFH.LocalData.SegmentInfo:
+                subseg_management_list = seginfo.SubSegment
+                for subseg in subseg_management_list: 
+                    window.Log("")
+                    window.Log("(+) Dumping UserBlocks from =>")
+                    window.Log("        _HEAP(0x%08x)->_LFH_HEAP(0x%08x)->_HEAP_LOCAL_DATA(0x%08x)" % (pheap.address,pheap.LFH.address,pheap.LFH.LocalData.address))
+                    window.Log("            ->_HEAP_LOCAL_SEGMENT_INFO[0x%x]->_HEAP_SUBSEGMENT(0x%08x)->_HEAP_USER_DATA_HEADER(0x%08x):" % (subseg.BlockSize, subseg.UserBlocks, subseg.UserDataHeader.address),subseg.UserBlocks)
+                    window.Log("")                 
+                    window.Log("(+) UserBlocks(0x%08x) => Size: 0x%04x %-8segment: 0x%08x FreeEntryOffset: 0x%04x Depth: %d" % (subseg.UserBlocks, subseg.BlockSize, subseg.type, subseg.UserBlocks, subseg.Offset, subseg.Depth), address = subseg.UserBlocks)
+                    window.Log("(+) Header => SubSegment: 0x%08x Resevered: 0x%08x SizeIndex: %x Signature: 0x%08x" % (subseg.UserDataHeader.SubSegment, subseg.UserDataHeader.Reserved, subseg.UserDataHeader.SizeIndex, subseg.UserDataHeader.Signature))
+                    window.Log("(+) Current UserBlocks pointer => UserBlocks + FreeEntryOffset => 0x%08x + 0x%04x = 0x%08x" % (subseg.UserBlocks, subseg.Offset, (subseg.UserBlocks+subseg.Offset)))
+                    window.Log("")
+                    #if lfhchunk:
+                    i = 0
+                    for chk in subseg.chunks:
+                        if chk.isLFH:
+                            i += 1
+                            s = "B"
+                            if chk.freeorder != -1:
+                                s = "F(%02x)" % chk.freeorder
+                                
+                                NextOffset = imm.readMemory(chk.addr+0x8,2)
+                                (NextOffset) = struct.unpack("H", NextOffset)[0]
+                                window.Log("-" * 111)
+                                window.Log("%04d: Chunk(0x%08x) -> Size: 0x%x LFHflag: 0x%x %s " % ( i, chk.addr, chk.psize,  chk.lfhflags, s),chk.addr)
+                                window.Log("%04d: Chunk(0x%08x) -> NextOffset: 0x%04x NextVirtualAddress -> UserBlocks + (NextOffset * 0x8): 0x%08x" % (i, chk.addr, NextOffset, (subseg.UserBlocks+(NextOffset*0x8))), chk.addr)
+                            
+                                if (subseg.chunks.index(chk)+1) < len(subseg.chunks):
+                                    offset_next_chunk = subseg.UserBlocks+(NextOffset*0x8)
+                                    next_chunk = subseg.chunks[subseg.chunks.index(chk)+1].addr
+                                    if offset_next_chunk == next_chunk:
+                                        window.Log("%04d: Chunk(0x%08x) ** has been validated **" % (i, chk.addr))
+                                    else:
+                                        window.Log("    --> %04d: Chunk(0x%08x) ** This free chunk has had its EntryOffset overwritten! **" % (i, chk.addr))
+                            
+                            elif chk.freeorder == -1:
+                                # dont worry about the NextVirtualAddress
+                                window.Log("%04d: Chunk(0x%08x) -> Size: 0x%x LFHflag: 0x%x %s" % ( i, chk.addr, chk.psize,  chk.lfhflags, s ),chk.addr)
+                    window.Log("=" * 111)
+
+
+# Lookaside list dumping function
+# ===============================
 def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
     """
     Dump the lookaside list structure
@@ -2374,7 +2447,8 @@ def main(args):
                     window.Log("(+) This version is the latest version...")
                     return "(!) This version is the latest version..."
   
-            # dump function pointers from the parent processes .data segment
+            # Dump function pointers from the parent processes .data segment
+            # ==============================================================
             # TODO: dump function pointers from dlls as well
             
             elif args[0].lower().strip() == "dumpfunctionpointers" or args[0].lower().strip() == "dfp":
@@ -2455,11 +2529,14 @@ def main(args):
             # runtime to detect if we are using LFH or lookaside
             
             elif args[0].lower().strip() == "analysefrontend" or args[0].lower().strip() == "af":
+
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
                 except:
-                    window.Log("Invalid heap address!")
-                    return "Invalid heap address!"
+                    window.Log("")
+                    window.Log("(-) Invalid heap address or cannot read address!")
+                    return "(-) Invalid heap address or cannot read address!"
+                
                 if imm.getOsVersion() == "xp":
                     FrontEndHeap = imm.readMemory(heap+0x580, 4)
                     (FrontEndHeap) = struct.unpack("L", FrontEndHeap)                    
@@ -2471,7 +2548,36 @@ def main(args):
                     else:
                         dump_lal(imm, pheap, graphic_structure, window)
                 elif imm.getOsVersion() == "7":
-                    window.Log("Lookaside list analyse not supported under Windows Vista and above")
+                    if pheap.FrontEndHeapType == 0x2:
+                        switch = {}
+                        switch["bucket_flag"] = False
+                        switch["UserBlockCache_flag"] = False
+                        switch["UserBlocks_flag"] = False
+                        
+                        if "-b" in args:
+                            switch["bucket_flag"] = True
+                        if "-c" in args:
+                            switch["UserBlockCache_flag"] = True
+                        if "-u" in args:
+                            switch["UserBlocks_flag"] = True
+                            
+                        if "-b" not in args and "-c" not in args and "-u" not in args:
+                            usageText = cmds["analysefrontend"].usage.split("\n")
+                            for line in usageText:
+                                window.Log(line)
+                        
+                        window.Log("")
+                        window.Log("-" * 28)
+                        window.Log("LFH information @ 0x%08x" % pheap.LFH.address)
+                        window.Log("-" * 28)
+                        if custfilename:
+                            dump_lfh(imm, pheap, graphic_structure, window, switch, filename)
+                        else:
+                            dump_lfh(imm, pheap, graphic_structure, window, switch)
+                    elif pheap.FrontEndHeapType == 0x1:
+                        window.Log("(?) You are running windows 7 yet the Lookaside list is being used?")
+                        return "(?) You are running windows 7 yet the Lookaside list is being used?"
+                    #window.Log("Lookaside list analyse not supported under Windows Vista and above")
             
             # analyse freelists
             # =================
@@ -2552,6 +2658,8 @@ def main(args):
                         window.Log("    1. Freeing 32 blocks into FreeList[0] simultaneously")
                         window.Log("    2. De-commiting 256 blocks")
                         return "(-) The HeapCache is inactive for this heap!"
+                elif imm.getOsVersion() == "7":
+                    return "(-) HeapCache not supported under windows 7"
                                                
             # perform hueristics
             # ==================
@@ -2956,7 +3064,6 @@ def main(args):
                     for line in usageText:
                         window.Log(line)                 
                                     
-                            
         # more than one command and that we cant understand
         # =================================================
         else:
