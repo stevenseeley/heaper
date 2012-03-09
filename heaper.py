@@ -654,16 +654,14 @@ def get_extended_usage():
     extusage["analysefrontend"] += "Use -u to dump the UserBlocks that are activated in the LFH\n"
     extusage["analysefrontend"] += "Use -c to dump the UserBlockCache structure\n"
     extusage["analysefrontend"] += "Use -b to dump the _HEAP_BUCKET's in the LFH\n"
-    extusage["analysefrontend"] += "Use -g to view a graphical representation of the LFH\n"
+    extusage["analysefrontend"] += "Use -g to view a graphical representation of the UserBlocks in the LFH\n"
     extusage["analysefrontend"] += "Use -f to specify a filename for the graph\n"
-    
     extusage["analysebackend"] = "\nanalysebackend <heap> / ab <heap> : Analyse a particular heap's backend free structure\n"
     extusage["analysebackend"] += "------------------------------------------------------------------------------------\n"   
     extusage["analysebackend"] += "Use -g to view a graphical representation of the freelist\n"
     extusage["analysebackend"] += "Use -f to specify a filename for the graph\n"
     extusage["analysesegments"] = "\nanalysesegment(s) <heap> / as <heap> : Analyse a particular heap's segment structure(s)\n"
     extusage["analysesegments"] += "------------------------------------------------------------------------------------\n"   
-    
     extusage["patch"] = "\npatch <function/data structures> / p <function/data structures> : patch memory for the heap\n"
     extusage["patch"] += "-------------------------------------------------------------------------------------------\n" 
     extusage["patch"] += "Use 'PEB' to patch the following areas:\n"
@@ -672,11 +670,8 @@ def get_extended_usage():
     extusage["patch"] += " - PEB.NtGlobalFlag\n"
     extusage["patch"] += " - PEB.LDR_DATA\n"
     extusage["patch"] += "example: !heaper patch PEB\n"
-    
     extusage["analyseheapcache"] = "\nanalyseheapcache <heap> / ahc <heap> : Analyse a particular heap's cache (FreeList[0])\n"
     extusage["analyseheapcache"] += "------------------------------------------------------------------------------------\n"   
-    #extusage["analyseheapcache"] += "Use -g to view a graphical representation of the heap cache (dev)\n"
-    
     extusage["analysechunks"] = "\nanalysechunks <heap> / ac <heap> : Analyse a particular heap's chunks\n"
     extusage["analysechunks"] += "---------------------------------------------------------------------\n"
     extusage["analysechunks"] += "Use -r <start address> <end address> to view all the chunks between those ranges\n"
@@ -1193,9 +1188,8 @@ def dump_teb(imm, window):
 
 # LFH dumping function
 # ====================
-
 def dump_lfh(imm, pheap, graphic_structure, window, switch, filename="lfh_graph"):
-    
+            
     # if the user wants, print out all this information
     if switch["bucket_flag"]:
         window.Log("")
@@ -1204,7 +1198,7 @@ def dump_lfh(imm, pheap, graphic_structure, window, switch, filename="lfh_graph"
         if pheap.LFH.Buckets:    
             for bucket in pheap.LFH.Buckets:
                 window.Log("bucket[%x] (0x%08x) -> BlockUnits: 0x%x UseAffinity: %x DebugFlags: %x" % (bucket.SizeIndex, bucket.address, bucket.BlockUnits, bucket.UseAffinity, bucket.DebugFlags),bucket.address)
-            
+        
     if switch["UserBlockCache_flag"]:
         window.Log("")
         window.Log("(+) Dumping UserBlockCache from _HEAP(0x%08x)->_LFH_HEAP(0x%08x)->UserBlockCache(+0x50):" % (pheap.address,pheap.LFH.address))
@@ -1212,12 +1206,17 @@ def dump_lfh(imm, pheap, graphic_structure, window, switch, filename="lfh_graph"
         if pheap.LFH.UserBlockCache:
             for cache in pheap.LFH.UserBlockCache:
                 window.Log("Cache: 0x%08x Next: 0x%08x Depth: 0x%x Sequence: 0x%x AvailableBlocks: %d Reserved: 0x%x" % (cache.address, cache.Next, cache.Depth, cache.Sequence, cache.AvailableBlocks, cache.Reserved))
-            
+        window.Log("=" * 92)
+         
     if switch["UserBlocks_flag"]:
+        if graphic_structure:
+            lfhgraph = pydot.Dot(graph_type='digraph')
     
         if pheap.LFH.LocalData:
             for seginfo in pheap.LFH.LocalData.SegmentInfo:
                 subseg_management_list = seginfo.SubSegment
+                Userblocks_nodes = []
+                chunk_nodes = []
                 for subseg in subseg_management_list: 
                     window.Log("")
                     window.Log("(+) Dumping UserBlocks from =>")
@@ -1225,11 +1224,13 @@ def dump_lfh(imm, pheap, graphic_structure, window, switch, filename="lfh_graph"
                     window.Log("            ->_HEAP_LOCAL_SEGMENT_INFO[0x%x]->_HEAP_SUBSEGMENT(0x%08x)->_HEAP_USER_DATA_HEADER(0x%08x):" % (subseg.BlockSize, subseg.UserBlocks, subseg.UserDataHeader.address),subseg.UserBlocks)
                     window.Log("")                 
                     window.Log("(+) UserBlocks(0x%08x) => Size: 0x%04x %-8segment: 0x%08x FreeEntryOffset: 0x%04x Depth: %d" % (subseg.UserBlocks, subseg.BlockSize, subseg.type, subseg.UserBlocks, subseg.Offset, subseg.Depth), address = subseg.UserBlocks)
-                    window.Log("(+) Header => SubSegment: 0x%08x Resevered: 0x%08x SizeIndex: %x Signature: 0x%08x" % (subseg.UserDataHeader.SubSegment, subseg.UserDataHeader.Reserved, subseg.UserDataHeader.SizeIndex, subseg.UserDataHeader.Signature))
+                    window.Log("(+) Header => SubSegment: 0x%08x Reserved: 0x%08x SizeIndex: 0x%x Signature: 0x%08x" % (subseg.UserDataHeader.SubSegment, subseg.UserDataHeader.Reserved, subseg.UserDataHeader.SizeIndex, subseg.UserDataHeader.Signature))
                     window.Log("(+) Current UserBlocks pointer => UserBlocks + FreeEntryOffset => 0x%08x + 0x%04x = 0x%08x" % (subseg.UserBlocks, subseg.Offset, (subseg.UserBlocks+subseg.Offset)))
                     window.Log("")
-                    #if lfhchunk:
                     i = 0
+                    if graphic_structure:
+                        UserBlocks_data = "UserBlocks 0x%x" % subseg.BlockSize
+                        Userblocks_nodes.append(pydot.Node(UserBlocks_data, style="filled", shape="rectangle", label=UserBlocks_data, fillcolor="#00eeaa"))
                     for chk in subseg.chunks:
                         if chk.isLFH:
                             i += 1
@@ -1254,8 +1255,44 @@ def dump_lfh(imm, pheap, graphic_structure, window, switch, filename="lfh_graph"
                             elif chk.freeorder == -1:
                                 # dont worry about the NextVirtualAddress
                                 window.Log("%04d: Chunk(0x%08x) -> Size: 0x%x LFHflag: 0x%x %s" % ( i, chk.addr, chk.psize,  chk.lfhflags, s ),chk.addr)
-                    window.Log("=" * 111)
 
+                        if graphic_structure:
+                            chunk_data = "(%d) chunk 0x%08x" % (i, chk.addr)
+                            if chk.freeorder == -1:
+                                chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data+"\nBUSY CHUNK", fillcolor="#0055ee"))
+                            elif chk.freeorder != -1:
+                                NextOffset = imm.readMemory(chk.addr+0x8,2)
+                                (NextOffset) = struct.unpack("H", NextOffset)[0]
+                                
+                                if (subseg.chunks.index(chk)+1) < len(subseg.chunks):
+                                    
+                                    offset_next_chunk = subseg.UserBlocks+(NextOffset*0x8)
+                                    next_chunk = subseg.chunks[subseg.chunks.index(chk)+1].addr
+                                    
+                                    if offset_next_chunk != next_chunk:
+                                        chunk_data = "(%d) chunk 0x%x\nFREE CHUNK\nNextVA: 0x%x\nEntryOffset Owned!!" % (i, chk.addr,(subseg.UserBlocks+(NextOffset*0x8)))
+                                        chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="red"))                                        
+                                    elif offset_next_chunk == next_chunk:
+                                        chunk_data = "(%d) chunk 0x%x\nFREE CHUNK\nNextVA: 0x%x" % (i, chk.addr,(subseg.UserBlocks+(NextOffset*0x8)))
+                                        chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
+                    window.Log("=" * 111)
+                    
+                if graphic_structure:
+                    lfhgraph.add_node(pydot.Node("free", style="filled", shape="rectangle", label="free chunk", fillcolor="#33ccff"))
+                    lfhgraph.add_node(pydot.Node("busy", style="filled", shape="rectangle", label="busy chunk", fillcolor="#0055ee"))
+                    
+                    for node in Userblocks_nodes: 
+                        lfhgraph.add_node(node)
+                        for node in chunk_nodes:
+                            lfhgraph.add_node(node)
+                            if (chunk_nodes.index(node)+1) < len(chunk_nodes):
+                                next_chunk_label = node.__get_attribute__("label")
+                                if not re.search("FREE CHUNK", next_chunk_label):
+                                    lfhgraph.add_edge(pydot.Edge(node, chunk_nodes[chunk_nodes.index(node)+1]))
+                                else:
+                                    lfhgraph.add_edge(pydot.Edge(node, chunk_nodes[chunk_nodes.index(node)+1], label="  NextOffset"))   
+            if graphic_structure:
+                lfhgraph.write_png(filename+".png")
 
 # Lookaside list dumping function
 # ===============================
@@ -1304,7 +1341,6 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                     try:
                         chunk_read_self_size = imm.readMemory(a, 0x2)
                         chunk_read_self_size = struct.unpack("H", chunk_read_self_size)[0]
-                        #chunk_read_self_size = chunk_read_self_size*8
                     except:
                         pass
                         
@@ -1359,7 +1395,7 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
                     elif (chunk_read_self_size * block) == (ndx * block):
                         b += 1
                         if graphic_structure:
-                            chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#3366ff"))
+                            chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
                         if not chunk_overwrite:
                             window.Log("    chunk [%d]: 0x%08x, Flink: 0x%08x-0x8, Size: %d (0x%03x), Cookie: 0x%01x" % 
                                        (b, a, (flink), (ndx * block), (ndx * block), chunkCookie[0]), address = a) 
@@ -1803,7 +1839,6 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
         window.Log("")
         window.Log("(+) FreeList:")
         window.Log("-------------")
-        
         for a in range(block.BaseIndex, num_of_freelists): # num_of_freelists
             entry= block.FreeList[a]
             e=entry[0]
@@ -1998,7 +2033,7 @@ def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="f
                     window.Log("         * Chunk [%d]: 0x%08x  [blink : 0x%08x  | flink : 0x%08x] " % (chunkNum, chunk_address, chunk_blink, chunk_flink), address = chunk_address) 
                     window.Log("                 [%d]: size: 0x%04x | calculated size: %d (0x%04x) - cookie: 0x%02x" % (chunkNum, sz, calc_sz, calc_sz, chunkCookie[0]), address = chunk_address) 
                     if graphic_structure:
-                        chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#3366ff"))
+                        chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
                     
                     if a != 0:
                         # now lets validate the integrity of the linked list using safe unlinking checks
@@ -2305,11 +2340,19 @@ def analyse_heap(heap, imm, window):
         window.Log("+0x014 VirtualMemoryThreshold         : 0x%08x" % pheap.VirtualMemoryThreshold, pheap.VirtualMemoryThreshold) 
         window.Log("+0x018 SegmentReserve                 : 0x%08x" % pheap.SegmentReserve, pheap.SegmentReserve)
         window.Log("+0x01C SegmentCommit                  : 0x%08x" % pheap.SegmentCommit, pheap.SegmentCommit)
-        window.Log("+0x020 DeCommitFreeBlockThreshold     : 0x%08x" % pheap.DeCommitFreeBlockThreshold, pheap.DeCommitFreeBlockThreshold)
-        window.Log("+0x024 DeCommitTotalBlockThreshold    : 0x%08x" % pheap.DeCommitTotalBlockThreshold, pheap.DeCommitTotalBlockThreshold)
+        if imm.getOsVersion() == "xp":
+            window.Log("+0x020 DeCommitFreeBlockThreshold     : 0x%08x" % pheap.DeCommitFreeBlockThreshold, pheap.DeCommitFreeBlockThreshold)
+            window.Log("+0x024 DeCommitTotalBlockThreshold    : 0x%08x" % pheap.DeCommitTotalBlockThreshold, pheap.DeCommitTotalBlockThreshold)
+        if imm.getOsVersion() == "7":
+            window.Log("+0x020 NumberOfPages                  : 0x%08x" % pheap.NumberOfPages, pheap.NumberOfPages)
+            window.Log("+0x024 FirstEntry                     : 0x%08x" % pheap.FirstEntry, pheap.FirstEntry)
         window.Log("+0x028 Total Free Size                : 0x%08x" % pheap.TotalFreeSize, pheap.TotalFreeSize)
-        window.Log("+0x02c MaximumAllocationSize          : 0x%08x" % pheap.MaximumAllocationSize, pheap.MaximumAllocationSize)
-                    
+        if imm.getOsVersion() == "xp":
+            window.Log("+0x02c MaximumAllocationSize          : 0x%08x" % pheap.MaximumAllocationSize, pheap.MaximumAllocationSize)
+        elif imm.getOsVersion() == "7":
+            NumberOfUnCommittedPages = imm.readMemory(heap+0x2c, 4)
+            NumberOfUnCommittedPages = struct.unpack("L", NumberOfUnCommittedPages)[0]
+            window.Log("+0x02c NumberOfUnCommittedPages       : 0x%08x" % NumberOfUnCommittedPages, NumberOfUnCommittedPages)
         # libheap does not have some members, so we are on our own
         ProcessHeapsListIndex = imm.readMemory(heap+0x30, 2)
         ProcessHeapsListIndex = struct.unpack("H", ProcessHeapsListIndex)[0]
@@ -2321,50 +2364,133 @@ def analyse_heap(heap, imm, window):
         window.Log("+0x03a MaximumTagIndex                : 0x%08x" % pheap.MaximumTagIndex, pheap.MaximumTagIndex)
         window.Log("+0x03c TagEntries                     : 0x%08x" % pheap.TagEntries, pheap.TagEntries)
         # uncommited range segments
-        window.Log("+0x040 UCRSegments                    : 0x%08x" % pheap.UCRSegments, pheap.UCRSegments)
-        window.Log("+0x044 UnusedUncommittedRanges        : 0x%08x" % pheap.UnusedUnCommittedRanges, pheap.UnusedUnCommittedRanges)
+        if imm.getOsVersion() == "xp":
+            window.Log("+0x040 UCRSegments                    : 0x%08x" % pheap.UCRSegments, pheap.UCRSegments)
+            window.Log("+0x044 UnusedUncommittedRanges        : 0x%08x" % pheap.UnusedUnCommittedRanges, pheap.UnusedUnCommittedRanges)
+        elif imm.getOsVersion() == "7":
+            window.Log("+0x040 Flags                          : 0x%08x" % pheap.Flags, pheap.Flags)
+            window.Log("+0x044 ForceFlags                     : 0x%08x" % pheap.ForceFlags, pheap.ForceFlags)
         window.Log("+0x048 AlignRound                     : 0x%08x" % pheap.AlignRound, pheap.AlignRound)
         window.Log("+0x04c AlignMask                      : 0x%08x" % pheap.AlignMask, pheap.AlignMask)
                     
         # lots of blocks..
-        window.Log("+0x050 VirtualAllocedBlocks            ")
-        for block in pheap.VirtualAllocedBlock:
-            v += 1
-            window.Log("       VirtualAllocedBlock %d          : 0x%08x" % (v,block), block)
-            imm.log("+0x058 Segments                       ")
-        for segment in pheap.Segments:
-            i += 1
-            window.Log("       Segment %d                      : 0x%08x" % (i,segment.BaseAddress), segment.BaseAddress)
-
-        FreelistBitmap = imm.readMemory(heap+0x158, 4)
-        FreelistBitmap = struct.unpack("L", FreelistBitmap)[0]
-        window.Log("+0x158 FreelistBitmap                 : 0x%08x" % FreelistBitmap, FreelistBitmap)
-        window.Log("+0x16a AllocatorBackTraceIndex        : 0x%08x" % pheap.AllocatorBackTraceIndex, pheap.AllocatorBackTraceIndex)
-        NonDedicatedListLength = imm.readMemory(heap+0x16c, 4)
-        NonDedicatedListLength = struct.unpack("L", NonDedicatedListLength)[0]
-        window.Log("+0x16c NonDedicatedListLength         : 0x%08x" % NonDedicatedListLength, NonDedicatedListLength)
-        window.Log("+0x170 LargeBlocksIndex               : 0x%08x" % pheap.LargeBlocksIndex, pheap.LargeBlocksIndex)
-        window.Log("+0x174 PseudoTagEntries               : 0x%08x" % pheap.PseudoTagEntries)
-        window.Log("+0x178 Freelist[0]                    : 0x%08x" % (heap+0x178), (heap+0x178))
-        window.Log("+0x578 LockVariable                   : 0x%08x" % pheap.LockVariable, pheap.LockVariable)
-        window.Log("+0x57c CommitRoutine                  : 0x%08x" % pheap.CommitRoutine, pheap.CommitRoutine)
-                    
-        FrontEndHeap = imm.readMemory(heap+0x580, 4)
-        FrontEndHeap = struct.unpack("L", FrontEndHeap)[0]
+        if imm.getOsVersion() == "xp":
+            window.Log("+0x050 VirtualAllocedBlocks            ")
+            for block in pheap.VirtualAllocedBlock:
+                v += 1
+                window.Log("       VirtualAllocedBlock %d          : 0x%08x" % (v,block), block)
+            window.Log("+0x058 Segments")
+            for segment in pheap.Segments:
+                i += 1
+                window.Log("       Segment %d                      : 0x%08x" % (i,segment.BaseAddress), segment.BaseAddress)                                      
         
-        FrontHeapLockCount = imm.readMemory(heap+0x584, 2)
-        FrontHeapLockCount = struct.unpack("H", FrontHeapLockCount)[0]
-                    
-        FrontEndHeapType = imm.readMemory(heap+0x586, 1)
-        FrontEndHeapType = struct.unpack("B", FrontEndHeapType)[0]
-                    
-        LastSegmentIndex = imm.readMemory(heap+0x587, 1)
-        LastSegmentIndex = struct.unpack("B", LastSegmentIndex)[0]
-                    
-        window.Log("+0x580 FrontEndHeap                   : 0x%08x" % FrontEndHeap, FrontEndHeap)
-        window.Log("+0x584 FrontHeapLockCount             : 0x%08x" % FrontHeapLockCount, FrontHeapLockCount)
-        window.Log("+0x586 FrontEndHeapType               : 0x%08x" % FrontEndHeapType, FrontEndHeapType)
-        window.Log("+0x587 LastSegmentIndex               : 0x%08x" % LastSegmentIndex, LastSegmentIndex)    
+            FreelistBitmap = imm.readMemory(heap+0x158, 4)
+            FreelistBitmap = struct.unpack("L", FreelistBitmap)[0]
+            window.Log("+0x158 FreelistBitmap                 : 0x%08x" % FreelistBitmap, FreelistBitmap)
+            window.Log("+0x16a AllocatorBackTraceIndex        : 0x%08x" % pheap.AllocatorBackTraceIndex, pheap.AllocatorBackTraceIndex)
+            NonDedicatedListLength = imm.readMemory(heap+0x16c, 4)
+            NonDedicatedListLength = struct.unpack("L", NonDedicatedListLength)[0]
+            window.Log("+0x16c NonDedicatedListLength         : 0x%08x" % NonDedicatedListLength, NonDedicatedListLength)
+            if imm.getOsVersion() == "xp":
+                window.Log("+0x170 LargeBlocksIndex               : 0x%08x" % pheap.LargeBlocksIndex, pheap.LargeBlocksIndex)
+            window.Log("+0x174 PseudoTagEntries               : 0x%08x" % pheap.PseudoTagEntries)
+            window.Log("+0x178 Freelist[0]                    : 0x%08x" % (heap+0x178), (heap+0x178))
+            window.Log("+0x578 LockVariable                   : 0x%08x" % pheap.LockVariable, pheap.LockVariable)
+            window.Log("+0x57c CommitRoutine                  : 0x%08x" % pheap.CommitRoutine, pheap.CommitRoutine)
+                        
+            FrontEndHeap = imm.readMemory(heap+0x580, 4)
+            FrontEndHeap = struct.unpack("L", FrontEndHeap)[0]
+            
+            FrontHeapLockCount = imm.readMemory(heap+0x584, 2)
+            FrontHeapLockCount = struct.unpack("H", FrontHeapLockCount)[0]
+                        
+            FrontEndHeapType = imm.readMemory(heap+0x586, 1)
+            FrontEndHeapType = struct.unpack("B", FrontEndHeapType)[0]
+                        
+            LastSegmentIndex = imm.readMemory(heap+0x587, 1)
+            LastSegmentIndex = struct.unpack("B", LastSegmentIndex)[0]
+                        
+            window.Log("+0x580 FrontEndHeap                   : 0x%08x" % FrontEndHeap, FrontEndHeap)
+            window.Log("+0x584 FrontHeapLockCount             : 0x%08x" % FrontHeapLockCount, FrontHeapLockCount)
+            window.Log("+0x586 FrontEndHeapType               : 0x%08x" % FrontEndHeapType, FrontEndHeapType)
+            window.Log("+0x587 LastSegmentIndex               : 0x%08x" % LastSegmentIndex, LastSegmentIndex)         
+        
+        elif imm.getOsVersion() == "7":
+            Encoding = imm.readMemory(heap+0x50, 4)
+            Encoding = struct.unpack("L", Encoding)[0]            
+            window.Log("+0x050 Encoding                       : 0x%08x" % Encoding, Encoding)
+            window.Log("+0x058 PointerKey                     : 0x%08x" % pheap.PointerKey, pheap.PointerKey)
+            Interceptor = imm.readMemory(heap+0x5c, 4)
+            Interceptor = struct.unpack("L", Interceptor)[0]            
+            window.Log("+0x05c Interceptor                    : 0x%08x" % Interceptor, Interceptor)
+            window.Log("+0x060 VirtualMemoryThreshold         : 0x%08x" % pheap.VirtualMemoryThreshold, pheap.VirtualMemoryThreshold)          
+            window.Log("+0x064 Signature                      : 0x%08x" % pheap.Signature, pheap.Signature)
+            window.Log("+0x068 SegmentReserve                 : 0x%08x" % pheap.SegmentReserve, pheap.SegmentReserve)
+            window.Log("+0x06c SegmentCommit                  : 0x%08x" % pheap.SegmentCommit, pheap.SegmentCommit)
+            DeCommitFreeBlockThreshold = imm.readMemory(heap+0x70, 4)
+            DeCommitFreeBlockThreshold = struct.unpack("L", DeCommitFreeBlockThreshold)[0]  
+            DeCommitTotalFreeThreshold = imm.readMemory(heap+0x74, 4)
+            DeCommitTotalFreeThreshold = struct.unpack("L", DeCommitTotalFreeThreshold)[0]  
+            window.Log("+0x070 DeCommitFreeBlockThreshold     : 0x%08x" % DeCommitFreeBlockThreshold, DeCommitFreeBlockThreshold)
+            window.Log("+0x074 DeCommitTotalFreeThreshold     : 0x%08x" % DeCommitTotalFreeThreshold, DeCommitTotalFreeThreshold)
+            window.Log("+0x078 TotalFreeSize                  : 0x%08x" % pheap.TotalFreeSize, pheap.TotalFreeSize)
+            MaximumAllocationSize = imm.readMemory(heap+0x7c, 4)
+            MaximumAllocationSize = struct.unpack("L", MaximumAllocationSize)[0]              
+            window.Log("+0x07c MaximumAllocationSize          : 0x%08x" % MaximumAllocationSize, MaximumAllocationSize)
+            window.Log("+0x080 ProcessHeapsListIndex          : 0x%08x" % pheap.ProcessHeapsListIndex, pheap.ProcessHeapsListIndex)
+            window.Log("+0x082 HeaderValidateLength           : 0x%08x" % pheap.HeaderValidateLength, pheap.HeaderValidateLength)
+            window.Log("+0x084 HeaderValidateCopy             : 0x%08x" % pheap.HeaderValidateCopy, pheap.HeaderValidateCopy)
+            window.Log("+0x088 NextAvailableTagIndex          : 0x%08x" % pheap.NextAvailableTagIndex, pheap.NextAvailableTagIndex)
+            window.Log("+0x08a MaximumTagIndex                : 0x%08x" % pheap.MaximumTagIndex, pheap.MaximumTagIndex)
+            window.Log("+0x08c TagEntries                     : 0x%08x" % pheap.TagEntries, pheap.TagEntries)
+            UCRList1 = imm.readMemory(heap+0x90, 4)
+            UCRList1 = struct.unpack("L", UCRList1)[0]
+            UCRList2 = imm.readMemory(heap+0x94, 4)
+            UCRList2 = struct.unpack("L", UCRList2)[0]      
+            window.Log("+0x090 UCRList                        : 0x%08x%08x" % (UCRList1, UCRList2))
+            window.Log("+0x098 AlignRound                     : 0x%08x" % pheap.AlignRound, pheap.AlignRound)
+            window.Log("+0x09c AlignMask                      : 0x%08x" % pheap.AlignMask, pheap.AlignMask)
+            VirtualAllocdBlocks1 = imm.readMemory(heap+0x0a0, 4)
+            VirtualAllocdBlocks1 = struct.unpack("L", VirtualAllocdBlocks1)[0]
+            VirtualAllocdBlocks2 = imm.readMemory(heap+0x0a4, 4)
+            VirtualAllocdBlocks2 = struct.unpack("L", VirtualAllocdBlocks2)[0]  
+            window.Log("+0x0a0 VirtualAllocdBlocks            : 0x%08x%08x" % (VirtualAllocdBlocks1, VirtualAllocdBlocks2))
+            SegmentList1 = imm.readMemory(heap+0x0a8, 4)
+            SegmentList1 = struct.unpack("L", SegmentList1)[0]
+            SegmentList2 = imm.readMemory(heap+0x0ac, 4)
+            SegmentList2 = struct.unpack("L", SegmentList2)[0]
+            window.Log("+0x0a8 SegmentList                    : 0x%08x%08x" % (SegmentList1, SegmentList2))            
+            window.Log("+0x0b0 AllocatorBackTraceIndex        : 0x%08x" % pheap.AllocatorBackTraceIndex, pheap.AllocatorBackTraceIndex)
+            NonDedicatedListLength = imm.readMemory(heap+0x0b4, 4)
+            NonDedicatedListLength = struct.unpack("L", NonDedicatedListLength)[0]
+            BlocksIndex = imm.readMemory(heap+0x0b8, 4)
+            BlocksIndex = struct.unpack("L", BlocksIndex)[0]            
+            UCRIndex = imm.readMemory(heap+0x0bc, 4)
+            UCRIndex = struct.unpack("L", UCRIndex)[0] 
+            FreeLists = imm.readMemory(heap+0x0c4, 4)
+            FreeLists = struct.unpack("L", FreeLists)[0]
+            window.Log("+0x0b4 NonDedicatedListLength         : 0x%08x" % NonDedicatedListLength, NonDedicatedListLength) 
+            window.Log("+0x0b8 BlocksIndex                    : 0x%08x" % BlocksIndex, BlocksIndex)   
+            window.Log("+0x0bc UCRIndex                       : 0x%08x" % UCRIndex, UCRIndex)      
+            window.Log("+0x0c0 PseudoTagEntries               : 0x%08x" % pheap.PseudoTagEntries, pheap.PseudoTagEntries)
+            window.Log("+0x0c4 FreeLists                      : 0x%08x" % FreeLists, FreeLists)      
+            window.Log("+0x0cc LockVariable                   : 0x%08x" % pheap.LockVariable, pheap.LockVariable)
+            window.Log("+0x0d0 CommitRoutine                  : 0x%08x" % pheap.CommitRoutine, pheap.CommitRoutine)
+            FrontEndHeap = imm.readMemory(heap+0x0d4, 4)
+            FrontEndHeap = struct.unpack("L", FrontEndHeap)[0]
+            FrontHeapLockCount = imm.readMemory(heap+0x0d8, 2)
+            FrontHeapLockCount = struct.unpack("H", FrontHeapLockCount)[0]
+            FrontEndHeapType = imm.readMemory(heap+0x0da, 2)
+            FrontEndHeapType = struct.unpack("H", FrontEndHeapType)[0]
+            Counters = imm.readMemory(heap+0x0dc, 4)
+            Counters = struct.unpack("L", Counters)[0]
+            TuningParameters = imm.readMemory(heap+0x0d8, 4)
+            TuningParameters = struct.unpack("L", TuningParameters)[0]
+            window.Log("+0x0d4 FrontEndHeap                   : 0x%08x" % FrontEndHeap, FrontEndHeap) 
+            window.Log("+0x0d8 FrontHeapLockCount             : 0x%04x" % FrontHeapLockCount, FrontHeapLockCount)   
+            window.Log("+0x0da FrontEndHeapType               : 0x%04x" % FrontEndHeapType, FrontEndHeapType)              
+            window.Log("+0x0dc Counters                       : 0x%08x" % Counters, Counters)  
+            window.Log("+0x130 TuningParameters               : 0x%08x" % TuningParameters, TuningParameters)
     return "(+) Dumped the heap structure 0x%08x" % heap
 
 # main entry
@@ -2517,26 +2643,29 @@ def main(args):
                     heap = int(heap,16)
                 except:
                     return "Invalid heap address"
-                if imm.getOsVersion() == "xp":
-                    analyse_heap(heap, imm, window)
-                elif imm.getOsVersion() == "7":
-                    window.Log("TODO: dump the heap structure under win7")
-                    window.Log("also add support to dump _LFH_HEAP and a few other structures")
-                    
-            # analyse the lookaside list
-            # ==========================
-            # TODO: change to analyse front end
-            # runtime to detect if we are using LFH or lookaside
-            
+                
+                analyse_heap(heap, imm, window)
+                window.Log("=" * 50)    
+                
+            # analyse the frontend
+            # ====================
             elif args[0].lower().strip() == "analysefrontend" or args[0].lower().strip() == "af":
 
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
                 except:
+                    # special case, incase we have a overwrite in a userblock
+                    # waiting on immunity to patch their code see: http://pastie.org/3551958
+                    for heap_handle in imm.getHeapsAddress():
+                        if heap_handle == int(args[1].lower().strip(),16):
+                            window.Log("") 
+                            window.Log("(!) The heap address supplied is valid, but the heap has a chunk overwrite", address = heap_handle, focus = 1)
+                            return "(!) Cannot analyse the heap if there is a chunk overwrite"
+                        
                     window.Log("")
                     window.Log("(-) Invalid heap address or cannot read address!")
                     return "(-) Invalid heap address or cannot read address!"
-                
+        
                 if imm.getOsVersion() == "xp":
                     FrontEndHeap = imm.readMemory(heap+0x580, 4)
                     (FrontEndHeap) = struct.unpack("L", FrontEndHeap)                    
@@ -2547,6 +2676,7 @@ def main(args):
                         dump_lal(imm, pheap, graphic_structure, window, filename)
                     else:
                         dump_lal(imm, pheap, graphic_structure, window)
+                        
                 elif imm.getOsVersion() == "7":
                     if pheap.FrontEndHeapType == 0x2:
                         switch = {}
@@ -2560,11 +2690,12 @@ def main(args):
                             switch["UserBlockCache_flag"] = True
                         if "-u" in args:
                             switch["UserBlocks_flag"] = True
-                            
                         if "-b" not in args and "-c" not in args and "-u" not in args:
                             usageText = cmds["analysefrontend"].usage.split("\n")
                             for line in usageText:
                                 window.Log(line)
+                            window.Log("=" * 59)
+                            return "(!) Please specify a correct option"
                         
                         window.Log("")
                         window.Log("-" * 28)
@@ -2579,9 +2710,8 @@ def main(args):
                         return "(?) You are running windows 7 yet the Lookaside list is being used?"
                     #window.Log("Lookaside list analyse not supported under Windows Vista and above")
             
-            # analyse freelists
-            # =================
-            # runtime to detect the ListHint and FreeList
+            # analyse the backend
+            # ===================
             
             elif args[0].lower().strip() == "analysebackend" or args[0].lower().strip() == "ab":
                 try:
@@ -3062,8 +3192,7 @@ def main(args):
                 except:
                     usageText = cmds["hook"].usage.split("\n")
                     for line in usageText:
-                        window.Log(line)                 
-                                    
+                        window.Log(line)
         # more than one command and that we cant understand
         # =================================================
         else:
