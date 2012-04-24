@@ -2849,6 +2849,10 @@ def analyse_heap(heap, imm, window):
 
 # main entry
 # ==========
+# TODO: complete refactoring of code.
+# - Graphing engine Class
+# - FrontEnd/BackEnd Classes
+# - any other ideas ??
 def main(args):
     imm = immlib.Debugger()
     
@@ -3141,7 +3145,6 @@ def main(args):
                                                
             # perform hueristics
             # ==================
-            # TODO: check win7 for hueristics
             elif args[0].lower().strip() == "exploit" or args[0].lower().strip() == "exp":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
