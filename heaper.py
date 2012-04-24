@@ -30,7 +30,7 @@ Note: you will need pydot, pyparser and graphviz for the graphing functionality
 __VERSION__ = '0.01'
 __IMM__ = '1.8'
 
-DESC="""!heaper - a tool to analyse heap structures."""
+DESC="""heaper - an advanced heap analysis plugin."""
 
 import immlib
 from immlib import LogBpHook
@@ -45,6 +45,7 @@ import re
 from hashlib import sha1
 import urllib2
 import inspect
+from immlib import AccessViolationHook
 
 # GLOBAL VARIABLES
 # ================
@@ -58,9 +59,11 @@ available_commands = ["dumppeb", "dp", "dumpheaps", "dh", "analyseheap", "ah", "
                       "exploit","exp","u","update", "patch", "p"]
 
 # graphiz engine needs this under windows 7
-paths = {"dot":"C:\\Program Files\\Graphviz 2.28\\bin\\dot.exe","twopi":"C:\\Program Files\\Graphviz 2.28\\bin\\twopi.exe",
-        "neato":"C:\\Program Files\\Graphviz 2.28\\bin\\neato.exe","circo":"C:\\Program Files\\Graphviz 2.28\\bin\\circo.exe",
-        "fdp":"C:\\Program Files\\Graphviz 2.28\\bin\\fdp.exe"}
+paths = {"dot":"C:\\Program Files\\Graphviz 2.28\\bin\\dot.exe",
+         "twopi":"C:\\Program Files\\Graphviz 2.28\\bin\\twopi.exe",
+         "neato":"C:\\Program Files\\Graphviz 2.28\\bin\\neato.exe",
+         "circo":"C:\\Program Files\\Graphviz 2.28\\bin\\circo.exe",
+         "fdp":"C:\\Program Files\\Graphviz 2.28\\bin\\fdp.exe"}
     
 # 8 byte block
 # ============
@@ -74,45 +77,39 @@ opennewwindow = False
 # ============
 graphic_structure = False
 
-# lookaside heuristic flag
-lookaside_corrupt = False
-
 # heap restore
 restore = False
 
-# emptybins flag
-emptybins = False
-
 # hook tags
 # =========
-tag = "display_box"
-ALLOCLABEL = "RtlAllocateHeap Hook"
-FREELABEL = "RtlFreeHeap Hook"
-CREATELABEL = "RtlCreateHeap Hook"
-DESTROYLABEL = "RtlDestroyHeap Hook"
-REALLOCLABEL = "RtlReAllocateHeap Hook"
-SIZELABEL = "RtlSizeHeap Hook"
-CREATECSLABEL = "RtlInitializeCriticalSection Hook"
-DELETECSLABEL = "RtlDeleteCriticalSection Hook"
-SETUEFLABEL = "SetUnhandledExceptionFilter Hook"
-VIRALLOCLABEL = "VirtualAlloc Hook"
-VIRFREELABEL = "VirtualFree Hook"
+tag             = "display_box"
+ALLOCLABEL      = "RtlAllocateHeap Hook"
+FREELABEL       = "RtlFreeHeap Hook"
+CREATELABEL     = "RtlCreateHeap Hook"
+DESTROYLABEL    = "RtlDestroyHeap Hook"
+REALLOCLABEL    = "RtlReAllocateHeap Hook"
+SIZELABEL       = "RtlSizeHeap Hook"
+CREATECSLABEL   = "RtlInitializeCriticalSection Hook"
+DELETECSLABEL   = "RtlDeleteCriticalSection Hook"
+SETUEFLABEL     = "SetUnhandledExceptionFilter Hook"
+VIRALLOCLABEL   = "VirtualAlloc Hook"
+VIRFREELABEL    = "VirtualFree Hook"
 
 # hook flags
 # ==========
-FilterHeap = False
-Disable = False
-AllocFlag = False
-FreeFlag = False
-CreateFlag = False
-DestroyFlag = False
-ReAllocFlag = False
-sizeFlag = False
-CreateCSFlag = False
-DeleteCSFlag = False
-setuefFlag = False
-setVAllocFlag = False
-setVFreeFlag = False
+FilterHeap      = False
+Disable         = False
+AllocFlag       = False
+FreeFlag        = False
+CreateFlag      = False
+DestroyFlag     = False
+ReAllocFlag     = False
+sizeFlag        = False
+CreateCSFlag    = False
+DeleteCSFlag    = False
+setuefFlag      = False
+setVAllocFlag   = False
+setVFreeFlag    = False
 
 # valid functions too hook
 # ========================
@@ -122,6 +119,16 @@ valid_functions = ["alloc", "free", "create", "destroy", "realloc", "size", "cre
 # return heap for hooking
 # =======================
 rheap = False
+
+# for hooking function pointers
+# =============================
+INDEXER    = 0xb4000000
+INDEX_MASK = 0xFF000000
+FNDX_MASK  = 0x00FFFFFF
+
+# The OS version
+# ==============
+OS = None
 ##################################################################################
 
 
@@ -256,7 +263,6 @@ def patch_PEB(imm, window):
     imm.writeLong(PEB + 0x68, 0)
 
     # Patch PEB_LDR_DATA 0xFEEEFEEE fill bytes ..  (about 3000 of them ..)
-    # lulz nice trick /mr_me
     a = imm.readLong(PEB + 0x0C)
     window.Log("(+) Patching PEB.LDR_DATA filling ..", address = a)
     while a != 0:
@@ -459,31 +465,63 @@ class function_hook_seed(LogBpHook):
         self.window.Log("(+) %s() returned random seed value: 0x%08x" % (self.fname, return_value),return_value)
         self.window.Log("(!) To calculate the real heapbase, do: heapbase - random seed = x")
         
+
+# Access Violation Hook class
+# thanks to the immunity team
+class FunctionTriggeredHook(AccessViolationHook):
+    def __init__( self, fn_ptr, window):
+        AccessViolationHook.__init__( self )
+        self.fn_ptr = fn_ptr
+        self.window = window
+
+    # found the access violation we force by patching every function pointer. 
+    def run(self, regs):
+        imm  = immlib.Debugger()
+        
+        eip  = regs['EIP']
+        # Checking if we are on the correct Access Violation
+        if ( eip & INDEX_MASK ) != INDEXER:
+            return ""
+        fndx = eip & FNDX_MASK
+        if fndx >= len( self.fn_ptr ) :
+            return ""
+        
+        obj  = self.fn_ptr[ fndx ] # it shouldn't be out of index
+        
+        # Print info and Unhook
+        self.window.Log("Found a pointer at 0x%08x that triggers: " % obj.address,  address = obj.address, focus =1 )
+        self.window.Log("   %s: %s" % ( obj.name, obj.Print() ), address = obj.address)
+
+        imm.setReg("EIP", int(obj.data) )
+        imm.run()
+        
 # HeapHook_vals, HeapHook_ret,         
 def hook_on(imm, LABEL, bp_address, function_name, bp_retaddress, Disable, window, heap=False, seed_address=False):
     """
-    this function creates the hooks and adds/deletes them to the instance of immdbg depending on
+    This function creates the hooks and adds/deletes them to the Debugger object depending on
     if they exist in immunities knowledge database
     
-    arguments:
-    - obj imm
-    - constant LABEL
-    - obj HeapHook_vals (hooking class)
-    - obj HeapHook_ret (hooking class)
-    - int bp_address (function entry address)
-    - int bp_retaddress (function exit address)
-    - boolean Disable (disable hook or not)
-    - obj window
+    @type  imm: Debugger Object
+    @param imm: initialized debugger object 
     
-    return:
-    - String showing if hook succeeded or not  
+    @type  LABEL: String
+    @param LABEL: Hook label, depending on the operation
+    
+    @type  bp_address: long
+    @param bp_address: The break point function entry address
+    
+    @type  function_name: String
+    @param function_name: The function name to hook 
+    
+ 
     """
     if not heap:
         heap = 0x00000000
         
     hook_values = imm.getKnowledge( LABEL + "%x_values" % heap)
     hook_ret_address = imm.getKnowledge( LABEL + "%x_ret" % heap)
-    if imm.getOsVersion() == "7":
+    #if OS >= 6.0:
+    if OS >= 6.0:
         hook_seed = imm.getKnowledge( LABEL + "%x_seed" % heap)
         
     if Disable:
@@ -493,9 +531,11 @@ def hook_on(imm, LABEL, bp_address, function_name, bp_retaddress, Disable, windo
         if not hook_ret_address:
             window.Log("(-) Error %s, no hook to disable for the return address!" % (LABEL))
             # if its debugged under windows xp, return from here
-            if imm.getOsVersion() != "7":
+            #if imm.getOsVersion() != "7":
+            if OS >= 6.0:
                 return "No hook to disable on"
-        if imm.getOsVersion() == "7" and not hook_seed:
+        #if OS >= 6.0 and not hook_seed:
+        if OS >= 6.0 and not hook_seed:
             window.Log("(-) Error %s, no hook to disable for the random seed value!" % (LABEL))
             return "No hook to disable on"            
         
@@ -505,7 +545,7 @@ def hook_on(imm, LABEL, bp_address, function_name, bp_retaddress, Disable, windo
             window.Log("(+) Unhooked %s" % LABEL)
             imm.forgetKnowledge( LABEL + "%x_values" % heap)
             imm.forgetKnowledge( LABEL + "%x_ret" % heap)
-            if imm.getOsVersion() == "7" and hook_seed:
+            if OS >= 6.0 and hook_seed:
                 imm.forgetKnowledge( LABEL + "%x_seed" % heap)
             return "Unhooked"
     # else we are not disabling...
@@ -528,7 +568,7 @@ def hook_on(imm, LABEL, bp_address, function_name, bp_retaddress, Disable, windo
                 hook_values= function_hook( window, function_name)
             hook_values.add( LABEL + "%x_values" % heap, bp_address)
         
-        if imm.getOsVersion() == "7" and not hook_seed:
+        if OS >= 6.0 and not hook_seed:
             if heap != 0:
                 hook_seed = function_hook_seed( window, function_name, heap)
             else:
@@ -538,7 +578,7 @@ def hook_on(imm, LABEL, bp_address, function_name, bp_retaddress, Disable, windo
             window.Log("(+) Placed %s to retrieve the seed value" % LABEL)
             imm.addKnowledge( LABEL + "%x_seed" % heap, hook_seed)
             
-        elif imm.getOsVersion() == "7" and hook_seed:
+        elif OS >= 6.0 and hook_seed:
             if heap != 0:
                 window.Log("(!) %s for the seed value on heap 0x%08x was ran previously, re-hooking" % (LABEL,heap))
                 hook_seed = function_hook_seed( window, function_name, heap)
@@ -568,7 +608,7 @@ def hook_on(imm, LABEL, bp_address, function_name, bp_retaddress, Disable, windo
 # banner
 # ======
 
-def win_banner(win):
+def banner(win):
     win.Log("----------------------------------------") 
     win.Log("    __                         ")
     win.Log("   / /  ___ ___ ____  ___ ____ ")
@@ -606,6 +646,7 @@ def usage(window, imm):
     window.Log("")
     return "eg: !heaper al 00480000"
 
+# runtime detection of avaliable functions
 def get_extended_usage():
     extusage = {}
     extusage["freelistinuse"] = "\nfreelistinuse <heap> / fliu <heap> : analyse/patch the FreeListInUse structure\n"
@@ -632,34 +673,59 @@ def get_extended_usage():
     extusage["hook"] += "- VirtualAllocEx()               [va]\n"
     extusage["hook"] += "- VirtualFreeEx()                [vf]\n"    
     extusage["hook"] += "- Hook all!                      [all]\n"
-    extusage["hook"] += "eg: !heaper hook 0x00150000 -h realloc\n"
-    extusage["hook"] += "eg: !heaper hook -u all\n"
-    extusage["hook"] += "eg: !heaper hook -h create\n"
+    extusage["hook"] += "Examples:\n"
+    extusage["hook"] += "~~~~~~~~~\n"
+    extusage["hook"] += "Hook RtlReAllocateHeap() on heap 0x00150000 '!heaper hook 0x00150000 -h realloc'\n"
+    extusage["hook"] += "Hook all heap functions '!heaper hook -u all'\n"
+    extusage["hook"] += "Hook RtlCreateHeap() '!heaper hook -h create'\n"
     extusage["dumpteb"] = "\ndumpteb / dt : List all of the TEB entry addresses\n"
     extusage["dumpteb"] += "--------------------------------------------------------\n"
     extusage["dumpheaps"] = "\ndumpheaps / dh : Dump all the heaps for a given process\n"
     extusage["dumpheaps"] += "-------------------------------------------------------\n"
     extusage["analyseheap"] = "\nanalyseheap <heap> / ah <heap> : Analyse a particular heap\n"
     extusage["analyseheap"] += "----------------------------------------------------------\n"
-    extusage["analyseheap"] += "Use -s to view the segments within that heap\n"
-    extusage["analyseheap"] += "Use -l to show the lookaside list\n"
-    extusage["analyseheap"] += "Use -f to show the freelist chunks available\n"
-    extusage["analyseheap"] += "Use -b to show the freelist bitmap\n"
-    extusage["analyseheap"] += "Use -v to show verbose information such as data structure headers\n"
     extusage["analysesegments"] = "\nanalysesegments <heap> / as <heap> : Analyse a particular heap's segment stucture(s)\n"
     extusage["analysesegments"] += "------------------------------------------------------------------------------------\n"   
     extusage["analysesegments"] += "Use -g to view a graphical representation of the heap structure\n"
     extusage["analysefrontend"] = "\nanalysefrontend <heap> / af <heap> : Analyse a particular heap's frontend free structure\n"
     extusage["analysefrontend"] += "----------------------------------------------------------------------------------------\n"   
-    extusage["analysefrontend"] += "Use -u to dump the UserBlocks that are activated in the LFH\n"
-    extusage["analysefrontend"] += "Use -c to dump the UserBlockCache structure\n"
-    extusage["analysefrontend"] += "Use -b to dump the _HEAP_BUCKET's in the LFH\n"
-    extusage["analysefrontend"] += "Use -g to view a graphical representation of the UserBlocks in the LFH\n"
-    extusage["analysefrontend"] += "Use -f to specify a filename for the graph\n"
+    
+    if OS >= 6.0:
+        extusage["analysefrontend"] += "Use -u to dump the UserBlocks that are activated in the LFH\n"
+        extusage["analysefrontend"] += "Use -s to specify a sized bin to dump\n"
+        extusage["analysefrontend"] += "Use -c to dump the UserBlockCache structure\n"
+        extusage["analysefrontend"] += "Use -b to dump the buckets in the LFH\n"
+        extusage["analysefrontend"] += "Use -g to view a graphical representation of the UserBlocks in the LFH\n"
+        extusage["analysefrontend"] += "Use -o to specify a filename for the graph\n"
+        extusage["analysefrontend"] += "Examples:\n"
+        extusage["analysefrontend"] += "~~~~~~~~~\n"
+        extusage["analysefrontend"] += "Dump the UserBlocks '!heaper af 0x00260000 -u'\n"
+        extusage["analysefrontend"] += "Dump the UserBlocks for size 0x40 '!heaper af 0x00260000 -u -s 0x40'\n"
+        extusage["analysefrontend"] += "Dump the UserBlockCache '!heaper af 0x00260000 -c'\n"
+        extusage["analysefrontend"] += "Dump the buckets '!heaper af 0x00260000 -b'\n"
+        extusage["analysefrontend"] += "Dump the UserBlocks and graph it '!heaper af 0x00260000 -u -g -o UserBlocks-example'\n"
+    elif OS < 6.0:
+        extusage["analysefrontend"] += "Use -l to dump the Lookaside Lists\n"
+        extusage["analysefrontend"] += "Use -g to view a graphical representation of the Lookaside Lists\n"
+        extusage["analysefrontend"] += "Use -o to specify a filename for the graph\n"
+        extusage["analysefrontend"] += "Examples:\n"
+        extusage["analysefrontend"] += "~~~~~~~~~\n"
+        extusage["analysefrontend"] += "Dump the Lookaside Lists '!heaper af 0x00260000 -l'\n"
+        extusage["analysefrontend"] += "Dump the Lookaside Lists and graph it '!heaper af 0x00260000 -l -g -o lookaside'\n"
+        
     extusage["analysebackend"] = "\nanalysebackend <heap> / ab <heap> : Analyse a particular heap's backend free structure\n"
-    extusage["analysebackend"] += "------------------------------------------------------------------------------------\n"   
-    extusage["analysebackend"] += "Use -g to view a graphical representation of the freelist\n"
-    extusage["analysebackend"] += "Use -f to specify a filename for the graph\n"
+    extusage["analysebackend"] += "------------------------------------------------------------------------------------\n" 
+    
+    if OS >= 6.0:
+        extusage["analysebackend"] += "Use -l to view the ListHints\n"
+        extusage["analysebackend"] += "Use -f to view the FreeList chunks\n"  
+        extusage["analysebackend"] += "Use -g to view a graphical representation of the ListHint/FreeList\n"
+    elif OS < 6.0:
+        extusage["analysebackend"] += "Use -h to view the HeapCache (if its activated)\n"
+        extusage["analysebackend"] += "Use -f to view the FreeList chunks\n"  
+        extusage["analysebackend"] += "Use -g to view a graphical representation of the FreeLists\n"
+    extusage["analysebackend"] += "Use -o to specify a filename for the graph\n"        
+    
     extusage["analysesegments"] = "\nanalysesegment(s) <heap> / as <heap> : Analyse a particular heap's segment structure(s)\n"
     extusage["analysesegments"] += "------------------------------------------------------------------------------------\n"   
     extusage["patch"] = "\npatch <function/data structures> / p <function/data structures> : patch memory for the heap\n"
@@ -669,7 +735,7 @@ def get_extended_usage():
     extusage["patch"] += " - PEB.ProcessHeap.Flag\n"
     extusage["patch"] += " - PEB.NtGlobalFlag\n"
     extusage["patch"] += " - PEB.LDR_DATA\n"
-    extusage["patch"] += "example: !heaper patch PEB\n"
+    extusage["patch"] += "Example: '!heaper patch PEB'\n"
     extusage["analyseheapcache"] = "\nanalyseheapcache <heap> / ahc <heap> : Analyse a particular heap's cache (FreeList[0])\n"
     extusage["analyseheapcache"] += "------------------------------------------------------------------------------------\n"   
     extusage["analysechunks"] = "\nanalysechunks <heap> / ac <heap> : Analyse a particular heap's chunks\n"
@@ -679,9 +745,18 @@ def get_extended_usage():
     extusage["analysechunks"] += "Use -v to view the first 16 bytes of each chunk\n"
     extusage["dumpfunctionpointers"] = "\ndumpfunctionpointers / dfp : Dump all the function pointers of the current process\n"
     extusage["dumpfunctionpointers"] += "-----------------------------------------------------------------------------------\n"
-    extusage["dumpfunctionpointers"] += "Use -p <addr/all> to patch a function pointer or all function pointers in the .data segment\n"
-    extusage["dumpfunctionpointers"] += "Use -r <addr/all> to restore a function pointer or all function pointers in the .data segment\n"
-    extusage["dumpfunctionpointers"] += "eg: !heaper dfp -r 005000f0\n"
+    extusage["dumpfunctionpointers"] += "Use -a <address> to specify where to start looking for function pointers\n"
+    extusage["dumpfunctionpointers"] += "Use -s <size> to specify the amount of data to search from the address\n"
+    extusage["dumpfunctionpointers"] += "Use -p <address/all> to patch a function pointer or all function pointers\n"
+    extusage["dumpfunctionpointers"] += "Use -r <address/all> to restore a function pointer or all function pointers\n"
+    extusage["dumpfunctionpointers"] += "Use -e <address,address,address> comma seperated list of addresses to exclude from patching/restoring\n"
+    extusage["dumpfunctionpointers"] += "Examples:\n"
+    extusage["dumpfunctionpointers"] += "~~~~~~~~~\n"
+    extusage["dumpfunctionpointers"] += "locate pointers - '!heaper dfp -s 3000 -a 0x00c55000'\n"
+    extusage["dumpfunctionpointers"] += "patch pointer - '!heaper dfp -p 0x00c56120'\n"
+    extusage["dumpfunctionpointers"] += "patch all pointers - '!heaper dfp -s 2000 -a 6ed86000 -p all -e 6ed86290,6ed86294'\n"
+    extusage["dumpfunctionpointers"] += "restore pointer - '!heaper dfp -r 0x00c56120'\n"
+    extusage["dumpfunctionpointers"] += "restore all pointers - '!heaper dfp -s 3000 -a 0x00c55000 -r all'\n"
     extusage["exploit"] = "\nexploit / exp : Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions\n"
     extusage["exploit"] += "-----------------------------------------------------------------------------------\n"
     extusage["exploit"] += "Use -f to analyse the FrontEnd allocator\n"
@@ -855,11 +930,8 @@ def freelist_and_lookaside_heuristics(window, chunk_data, pheap, imm, data_struc
                         if chunk.size < 0x80:
                             window.Log("(+) Chunk is set to size 0x%04x so next allocation of size 0x%04x" % (chunk.size,pheap.chunks[index-1].size),chunk.addr)
                             window.Log("    will flip the FreeListInUse[0x%04x] entry" % (chunk.size),chunk.addr)
-
                         else:
                             window.Log("(+) Chunk is set to size 0x%04x, try setting it < 0x80" % (chunk.size))
-                        
-                        
                         if ((pheap.chunks[index-1].nextchunk == 0) and (pheap.chunks[index+1].prevchunk == 0)):
                             window.Log("(+) Detected the chunk to be lonely!",chunk.addr)
                         else:
@@ -901,12 +973,8 @@ def freelist_and_lookaside_heuristics(window, chunk_data, pheap, imm, data_struc
                             prev_chunk = lookaside_chunk_list[lookaside_chunk_list.index(a)-1]
                         except:
                             prev_chunk = 0
-                        #window.Log("len: %d vs ndx: %d" % (len(pheap.Lookaside),ndx))
-                        #window.Log("chunk: %x, flink: %x, sflink: %x" % (a,next_chunk, chunk_flink-0x8))
                         # first lets check the size
-                        
                         if chunk_size != ndx and (next_chunk == 0 or next_chunk == (chunk_flink-0x8)):
-                            #lookaside_corrupt = True
                             vuln_chunks += 1 
                             window.Log("")    
                             window.Log("(!) Size has not been set for chunk 0x%08x, possibly because it doesnt exist" % a)
@@ -918,7 +986,6 @@ def freelist_and_lookaside_heuristics(window, chunk_data, pheap, imm, data_struc
                         # overwrite the size, but not the flink..    
                         elif chunk_size != ndx and (next_chunk != (chunk_flink-0x8) or next_chunk != 0):
                             vuln_chunks += 1
-                            #lookaside_corrupt = True
                             window.Log("")
                             window.Log("(!) Size has been overwritten for chunk 0x%08x" % a)
                             window.Log("(+) Try to overwrite the flink for this chunk")                            
@@ -960,7 +1027,7 @@ def dump_peb(imm, window, dump_management=False):
         (AtlThunkSListPtr32) = struct.unpack("L", AtlThunkSListPtr32)[0]
         
         # only need em if we are running win7's PEB structure
-        if imm.getOsVersion() == "7":
+        if OS >= 6.0:
             AtlThunkSListPtr = imm.readMemory(peb+0x20, 4)
             (AtlThunkSListPtr) = struct.unpack("L", AtlThunkSListPtr)[0]
             IFEOKey = imm.readMemory(peb+0x24, 4)
@@ -1019,9 +1086,9 @@ def dump_peb(imm, window, dump_management=False):
         window.Log("+0x000 InheritedAddressSpace                 : 0x%08x" % peb_struct.InheritedAddressSpace, peb_struct.InheritedAddressSpace)
         window.Log("+0x001 ReadImageFileExecOptions              : 0x%08x" % peb_struct.ReadImageFileExecOptions, peb_struct.ReadImageFileExecOptions)
         window.Log("+0x002 BeingDebugged                         : 0x%08x" % peb_struct.BeingDebugged, peb_struct.BeingDebugged) 
-        if imm.getOsVersion() == "xp":
+        if OS < 6.0:
             window.Log("+0x003 SpareBool                             : 0x%08x" % peb_struct.SpareBool, peb_struct.SpareBool)
-        elif imm.getOsVersion() == "7":
+        elif OS >= 6.0:
             # according the wingdbg symbols
             window.Log("+0x003 BitField                              : 0x%x" % offset_three,offset_three)
             window.Log("+0x003 ImageUsesLargePages                   : bit: %s" % binary_three[1])
@@ -1037,11 +1104,11 @@ def dump_peb(imm, window, dump_management=False):
         window.Log("+0x014 SubSystemData                         : 0x%08x" % peb_struct.SubSystemData, peb_struct.SubSystemData)
         window.Log("+0x018 ProcessHeap                           : 0x%08x" % peb_struct.ProcessHeap, peb_struct.ProcessHeap)
         window.Log("+0x01c FastPebLock                           : 0x%08x" % peb_struct.FastPebLock, peb_struct.FastPebLock)
-        if imm.getOsVersion() == "xp":
+        if OS < 6.0:
             window.Log("+0x020 FastPebLockRoutine                    : 0x%08x" % peb_struct.FastPebLockRoutine, peb_struct.FastPebLockRoutine)
             window.Log("+0x024 FastPebUnLockRoutine                  : 0x%08x" % peb_struct.FastPebUnlockRoutine, peb_struct.FastPebUnlockRoutine)
             window.Log("+0x028 EnvironmentUpdateCount                : 0x%08x" % peb_struct.EnviromentUpdateCount, peb_struct.EnviromentUpdateCount)
-        elif imm.getOsVersion() == "7":
+        elif OS >= 6.0:
             window.Log("+0x020 AtlThunkSListPtr                      : 0x%08x" % AtlThunkSListPtr,AtlThunkSListPtr)
             window.Log("+0x024 IFEOKey                               : 0x%08x" % IFEOKey, IFEOKey)
             # according the wingdbg symbols
@@ -1053,23 +1120,23 @@ def dump_peb(imm, window, dump_management=False):
             window.Log("+0x028 ProcessUsingFTH                       : bit: %s" % binary_twenty_eight[5])
             window.Log("+0x028 ReservedBits0                         : bits 6-32: %s" % binary_twenty_eight[-27:len(binary_twenty_eight)])
         window.Log("+0x02c KernelCallbackTable                   : 0x%08x" % peb_struct.KernelCallbackTable, peb_struct.KernelCallbackTable)
-        if imm.getOsVersion() == "7":
+        if OS >= 6.0:
             window.Log("+0x02c UserSharedInfoPtr                     : 0x%08x" % peb_struct.KernelCallbackTable, peb_struct.KernelCallbackTable)
         for sysResv in peb_struct.SystemReserved:
             window.Log("    +0x030 SystemReserved                    : 0x%08x" % sysResv, sysResv) 
         window.Log("+0x034 AtlThunkSListPtr32                    : 0x%08x" % AtlThunkSListPtr32, AtlThunkSListPtr32)
-        if imm.getOsVersion() == "xp": 
+        if OS < 6.0: 
             window.Log("+0x038 FreeList                              : 0x%08x" % peb_struct.FreeList, peb_struct.FreeList)
-        elif imm.getOsVersion() == "7":
+        elif OS >= 6.0:
             window.Log("+0x038 ApiSetMap                             : 0x%08x" % ApiSetMap, ApiSetMap)
         window.Log("+0x03c TlsExpansionCounter                   : 0x%08x" % peb_struct.TlsExpansionCounter, peb_struct.TlsExpansionCounter)
         window.Log("+0x040 TlsBitmap                             : 0x%08x" % peb_struct.TlsBitmap, peb_struct.TlsBitmap)
         for bits in peb_struct.TlsBitmapBits:
             window.Log("    +0x044 TlsBitmapBits                     : 0x%08x" % bits, bits)
         window.Log("+0x04c ReadOnlySharedMemoryBase              : 0x%08x" % peb_struct.ReadOnlySharedMemoryBase, peb_struct.ReadOnlySharedMemoryBase)
-        if imm.getOsVersion() == "xp":
+        if OS < 6.0:
             window.Log("+0x050 ReadOnlySharedMemoryHeap              : 0x%08x" % peb_struct.ReadOnlySharedMemoryheap, peb_struct.ReadOnlySharedMemoryheap)
-        elif imm.getOsVersion() == "7":
+        elif OS >= 6.0:
             # ReadOnlySharedMemoryheap == HotpatchInformation
             window.Log("+0x050 HotpatchInformation                   : 0x%08x" % peb_struct.ReadOnlySharedMemoryheap, peb_struct.ReadOnlySharedMemoryheap)
         window.Log("+0x054 ReadOnlyStaticServerData              : 0x%08x" % peb_struct.ReadOnlyStaticServerData, peb_struct.ReadOnlyStaticServerData)
@@ -1099,10 +1166,10 @@ def dump_peb(imm, window, dump_management=False):
         window.Log("+0x0b4 ImageSubsystem                        : 0x%08x" % peb_struct.ImageSubsystem, peb_struct.ImageSubsystem) 
         window.Log("+0x0b8 ImageSubsystemMajorVersion            : 0x%08x" % peb_struct.ImageSubsystemMajorVersion, peb_struct.ImageSubsystemMajorVersion) 
         window.Log("+0x0bc ImageSubsystemMinorVersion            : 0x%08x" % peb_struct.ImageSubsystemMinorVersion, peb_struct.ImageSubsystemMinorVersion) 
-        if imm.getOsVersion() == "XP":
+        if OS < 6.0:
             # ImageProcessAffinityMask == ActiveProcessAffinityMask 
             window.Log("+0x0c0 ImageProcessAffinityMask              : 0x%08x" % peb_struct.ImageProcessAffinityMask, peb_struct.ImageProcessAffinityMask) 
-        elif imm.getOsVersion() == "7":
+        elif OS >= 6.0:
             window.Log("+0x0c0 ActiveProcessAffinityMask             : 0x%08x" % peb_struct.ImageProcessAffinityMask, peb_struct.ImageProcessAffinityMask) 
         for buff in peb_struct.GdiHandleBuffer:
             window.Log("    +0x0c4 GdiHandleBuffer                   : 0x%08x" % buff, buff) 
@@ -1121,7 +1188,7 @@ def dump_peb(imm, window, dump_management=False):
         window.Log("+0x200 SystemDefaultActivationContextData    : 0x%08x" % SystemDefaultActivationContextData, SystemDefaultActivationContextData) 
         window.Log("+0x204 SystemAssemblyStorageMap              : 0x%08x" % SystemAssemblyStorageMap, SystemAssemblyStorageMap) 
         window.Log("+0x208 MinimumStackCommit                    : 0x%08x" % MinimumStackCommit, MinimumStackCommit) 
-        if imm.getOsVersion() == "7":
+        if OS >= 6.0:
             window.Log("+0x20c FlsCallback                       : 0x%08x" % FlsCallback,FlsCallback)
             window.Log("+0x210 FlsListHead                       : 0x%08x" % FlsListHead,FlsListHead)
             window.Log("+0x218 FlsBitmap                         : 0x%08x" % FlsBitmap,FlsBitmap)
@@ -1189,7 +1256,129 @@ def dump_teb(imm, window):
 # LFH dumping function
 # ====================
 def dump_lfh(imm, pheap, graphic_structure, window, switch, filename="lfh_graph"):
-            
+      
+    def dump_UserBlocks(UserBlocksIndex, chunk_nodes=False):
+        # validate the chunks havent had there offsets overwritten..
+        chunk_validation_list = []
+        free_chunk_validation_list = []
+        for chunk in subseg.chunks:
+            chunk_validation_list.append(chunk.addr)
+            if chunk.freeorder != -1:
+                    free_chunk_validation_list.append(chunk.freeorder)
+        free_chunk_validation_list.sort()
+        window.Log("")
+        window.Log("(+) Dumping UserBlocks from =>")
+        window.Log("        _HEAP(0x%08x)->_LFH_HEAP(0x%08x)->_HEAP_LOCAL_DATA(0x%08x)" % (pheap.address,pheap.LFH.address,pheap.LFH.LocalData.address),pheap.LFH.LocalData.address)
+        try:
+            window.Log("            ->_HEAP_LOCAL_SEGMENT_INFO[0x%x]->_HEAP_SUBSEGMENT(0x%08x)->_HEAP_USERDATA_HEADER(0x%08x):" % (subseg.BlockSize, subseg.UserDataHeader.SubSegment, subseg.UserDataHeader.address),subseg.UserBlocks)
+        except:
+            window.Log("            ->_HEAP_LOCAL_SEGMENT_INFO[?]->_HEAP_SUBSEGMENT(?)->_HEAP_USERDATA_HEADER(?):") 
+        window.Log("")                 
+        window.Log("(+) UserBlocks(0x%08x) => Size: 0x%04x %-8segment: 0x%08x FreeEntryOffset: 0x%04x Depth: %d" % (subseg.UserBlocks, subseg.BlockSize, subseg.type, subseg.UserBlocks, subseg.Offset, subseg.Depth), address = subseg.UserBlocks)
+        try:
+            window.Log("(+) Header => SubSegment: 0x%08x Reserved: 0x%08x SizeIndex: 0x%x Signature: 0x%08x" % (subseg.UserDataHeader.SubSegment, subseg.UserDataHeader.Reserved, subseg.UserDataHeader.SizeIndex, subseg.UserDataHeader.Signature),subseg.UserDataHeader.SubSegment)
+        except:
+            window.Log("(+) Header => SubSegment: ? Reserved: ? SizeIndex: ? Signature: ?")
+        window.Log("(+) Current UserBlocks pointer => UserBlocks + FreeEntryOffset => 0x%08x + 0x%04x = 0x%08x" % (subseg.UserBlocks, subseg.Offset, (subseg.UserBlocks+subseg.Offset)))
+        window.Log("")
+        i = 0
+        if graphic_structure:
+            UserBlocks_data = "UserBlocks 0x%08x\nSize:0x%x" % (subseg.UserBlocks,subseg.BlockSize)
+            Userblocks_nodes.append(pydot.Node(UserBlocks_data, style="filled", shape="rectangle", label=UserBlocks_data, fillcolor="#00eeaa"))
+        
+        for chk in subseg.chunks:
+            if chk.isLFH:
+                i += 1
+                s = "B"
+                if chk.freeorder != -1:
+                    s = "F(%02x)" % chk.freeorder     
+                    NextOffset = imm.readMemory(chk.addr+0x8,2)
+                    (NextOffset) = struct.unpack("H", NextOffset)[0]
+                    window.Log("-" * 111)
+                    window.Log("%04d: Chunk(0x%08x) -> Size: 0x%x LFHflag: 0x%x %s " % ( i, chk.addr, chk.psize,  chk.lfhflags, s),chk.addr)
+                    window.Log("%04d: Chunk(0x%08x) -> NextOffset: 0x%04x NextVirtualAddress -> UserBlocks + (NextOffset * 0x8): 0x%08x" % (i, chk.addr, NextOffset, (subseg.UserBlocks+(NextOffset*0x8))), chk.addr)
+                    if (subseg.chunks.index(chk)+1) < len(subseg.chunks):
+                        offset_next_chunk = subseg.UserBlocks+(NextOffset*0x8)
+                        next_chunk = subseg.chunks[subseg.chunks.index(chk)+1].addr
+                        if offset_next_chunk == next_chunk:
+                            window.Log("%04d: Chunk(0x%08x) ** This chunk has been validated against the next chunk **" % (i, chk.addr))
+                        elif offset_next_chunk in chunk_validation_list:
+                            window.Log("%04d: Chunk(0x%08x) ** This chunk has been validated **" % (i, chk.addr))
+                        elif chk.freeorder == free_chunk_validation_list[len(free_chunk_validation_list) -1]:
+                            encoded_header = imm.readMemory(chk.addr-0x8,2)
+                            (encoded_header) = struct.unpack("H", encoded_header)[0]
+                            if NextOffset == 0xffff:
+                                # shits gone funky y0! - bcoles :0)
+                                # if its the last chunk and the nextoffset is 0xffff, then double check
+                                # the rest of the header to ensure you havent overwritten it...
+                                if encoded_header == NextOffset:
+                                    window.Log("    --> **********************************************************************************************")
+                                    window.Log("    --> ** %04d: Chunk(0x%08x) ** The EntryOffset (0x%04x) for this chunk has been overwritten! **" % (i, chk.addr, NextOffset))
+                                    window.Log("    --> **********************************************************************************************")                                    
+                                else:
+                                    window.Log("%04d: Chunk(0x%08x) ** This chunk has been validated as the last chunk **" % (i, chk.addr))
+                            elif NextOffset != 0xffff:
+                                window.Log("    --> **********************************************************************************************")
+                                window.Log("    --> ** %04d: Chunk(0x%08x) ** The EntryOffset (0x%04x) for this chunk has been overwritten! **" % (i, chk.addr, NextOffset))
+                                window.Log("    --> **********************************************************************************************")
+                        elif offset_next_chunk not in chunk_validation_list:
+                            window.Log("    --> **********************************************************************************************")
+                            window.Log("    --> ** %04d: Chunk(0x%08x) ** The EntryOffset (0x%04x) for this chunk has been overwritten! **" % (i, chk.addr, NextOffset))
+                            window.Log("    --> **********************************************************************************************")
+                elif chk.freeorder == -1:
+                    # dont worry about the NextVirtualAddress
+                    window.Log("%04d: Chunk(0x%08x) -> Size: 0x%x LFHflag: 0x%x %s" % ( i, chk.addr, chk.psize,  chk.lfhflags, s ),chk.addr)
+
+            if graphic_structure:
+                chunk_data = "(%d) chunk 0x%08x" % (i, chk.addr)
+                if chk.freeorder == -1:
+                    chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data+"\nBUSY CHUNK", fillcolor="#0055ee"))
+                elif chk.freeorder != -1:
+                    NextOffset = imm.readMemory(chk.addr+0x8,2)
+                    (NextOffset) = struct.unpack("H", NextOffset)[0]
+                                
+                    if (subseg.chunks.index(chk)+1) < len(subseg.chunks):
+                        offset_next_chunk = subseg.UserBlocks+(NextOffset*0x8)
+                        next_chunk = subseg.chunks[subseg.chunks.index(chk)+1].addr
+                        
+                        # 1st check to see if the calculated NextOffset matches the next chunk address
+                        # 2nd check that it is not the last free chunk
+                        # 3rd check to see if the NextOffset is 0xffff
+                        # 4th check to see if part of the encoded header matches the NextOffset
+                        
+                        if offset_next_chunk == next_chunk:
+                            chunk_data = "(%d) chunk 0x%08x\nFREE CHUNK\nNextVA: 0x%08x" % (i, chk.addr,(subseg.UserBlocks+(NextOffset*0x8)))
+                            chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
+                        elif offset_next_chunk in chunk_validation_list:
+                            chunk_data = "(%d) chunk 0x%08x\nFREE CHUNK\nNextVA: 0x%08x" % (i, chk.addr,(subseg.UserBlocks+(NextOffset*0x8)))
+                            chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
+                        elif chk.freeorder == free_chunk_validation_list[len(free_chunk_validation_list) -1]:
+                            encoded_header = imm.readMemory(chk.addr-0x8,2)
+                            (encoded_header) = struct.unpack("H", encoded_header)[0]
+                            if NextOffset == 0xffff:
+                                encoded_header = imm.readMemory(chk.addr-0x8,2)
+                                (encoded_header) = struct.unpack("H", encoded_header)[0]
+                                
+                                # if its the last chunk and the nextoffset is 0xffff, then double check
+                                # the rest of the header to ensure you havent overwritten it...
+                                if encoded_header == NextOffset:
+                                    chunk_data = "(%d) chunk 0x%08x\nFREE CHUNK\nNextVA: 0x%08x\nEntryOffset overwritten!" % (i, chk.addr,(subseg.UserBlocks+(NextOffset*0x8)))
+                                    chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="red"))
+                                else:
+                                    chunk_data = "(%d) chunk 0x%08x\nFREE CHUNK\nNextVA: 0x%08x" % (i, chk.addr,(subseg.UserBlocks+(NextOffset*0x8)))
+                                    chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
+                            elif NextOffset != 0xffff:
+                                chunk_data = "(%d) chunk 0x%08x\nFREE CHUNK\nNextVA: 0x%08x\nEntryOffset overwritten!" % (i, chk.addr,(subseg.UserBlocks+(NextOffset*0x8)))
+                                chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="red"))
+                        
+                        # the only case when we have an entry overwrite
+                        elif offset_next_chunk not in chunk_validation_list:
+                            chunk_data = "(%d) chunk 0x%08x\nFREE CHUNK\nNextVA: 0x%x\nEntryOffset overwritten!" % (i, chk.addr,(subseg.UserBlocks+(NextOffset*0x8)))
+                            chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="red")) 
+
+        window.Log("-" * 111)
+        return chunk_nodes               
+        
     # if the user wants, print out all this information
     if switch["bucket_flag"]:
         window.Log("")
@@ -1197,102 +1386,65 @@ def dump_lfh(imm, pheap, graphic_structure, window, switch, filename="lfh_graph"
         window.Log("")
         if pheap.LFH.Buckets:    
             for bucket in pheap.LFH.Buckets:
-                window.Log("bucket[%x] (0x%08x) -> BlockUnits: 0x%x UseAffinity: %x DebugFlags: %x" % (bucket.SizeIndex, bucket.address, bucket.BlockUnits, bucket.UseAffinity, bucket.DebugFlags),bucket.address)
+                if switch["Bin_size"]:
+                    if bucket.SizeIndex == int(switch["Bin_size"],16):
+                        window.Log("bucket[%x] (0x%08x) -> BlockUnits: 0x%x UseAffinity: %x DebugFlags: %x" % (bucket.SizeIndex, bucket.address, bucket.BlockUnits, bucket.UseAffinity, bucket.DebugFlags),bucket.address)
+                else:
+                    window.Log("bucket[%x] (0x%08x) -> BlockUnits: 0x%x UseAffinity: %x DebugFlags: %x" % (bucket.SizeIndex, bucket.address, bucket.BlockUnits, bucket.UseAffinity, bucket.DebugFlags),bucket.address)
+        window.Log("-" * 83)
         
     if switch["UserBlockCache_flag"]:
         window.Log("")
         window.Log("(+) Dumping UserBlockCache from _HEAP(0x%08x)->_LFH_HEAP(0x%08x)->UserBlockCache(+0x50):" % (pheap.address,pheap.LFH.address))
         window.Log("")
         if pheap.LFH.UserBlockCache:
-            for cache in pheap.LFH.UserBlockCache:
+            for cache in pheap.LFH.UserBlockCache:           
                 window.Log("Cache: 0x%08x Next: 0x%08x Depth: 0x%x Sequence: 0x%x AvailableBlocks: %d Reserved: 0x%x" % (cache.address, cache.Next, cache.Depth, cache.Sequence, cache.AvailableBlocks, cache.Reserved))
-        window.Log("=" * 92)
+        window.Log("-" * 96)
          
     if switch["UserBlocks_flag"]:
-        if graphic_structure:
-            lfhgraph = pydot.Dot(graph_type='digraph')
-    
+       
         if pheap.LFH.LocalData:
             for seginfo in pheap.LFH.LocalData.SegmentInfo:
                 subseg_management_list = seginfo.SubSegment
-                Userblocks_nodes = []
-                chunk_nodes = []
-                for subseg in subseg_management_list: 
-                    window.Log("")
-                    window.Log("(+) Dumping UserBlocks from =>")
-                    window.Log("        _HEAP(0x%08x)->_LFH_HEAP(0x%08x)->_HEAP_LOCAL_DATA(0x%08x)" % (pheap.address,pheap.LFH.address,pheap.LFH.LocalData.address))
-                    window.Log("            ->_HEAP_LOCAL_SEGMENT_INFO[0x%x]->_HEAP_SUBSEGMENT(0x%08x)->_HEAP_USER_DATA_HEADER(0x%08x):" % (subseg.BlockSize, subseg.UserBlocks, subseg.UserDataHeader.address),subseg.UserBlocks)
-                    window.Log("")                 
-                    window.Log("(+) UserBlocks(0x%08x) => Size: 0x%04x %-8segment: 0x%08x FreeEntryOffset: 0x%04x Depth: %d" % (subseg.UserBlocks, subseg.BlockSize, subseg.type, subseg.UserBlocks, subseg.Offset, subseg.Depth), address = subseg.UserBlocks)
-                    window.Log("(+) Header => SubSegment: 0x%08x Reserved: 0x%08x SizeIndex: 0x%x Signature: 0x%08x" % (subseg.UserDataHeader.SubSegment, subseg.UserDataHeader.Reserved, subseg.UserDataHeader.SizeIndex, subseg.UserDataHeader.Signature))
-                    window.Log("(+) Current UserBlocks pointer => UserBlocks + FreeEntryOffset => 0x%08x + 0x%04x = 0x%08x" % (subseg.UserBlocks, subseg.Offset, (subseg.UserBlocks+subseg.Offset)))
-                    window.Log("")
-                    i = 0
-                    if graphic_structure:
-                        UserBlocks_data = "UserBlocks 0x%x" % subseg.BlockSize
-                        Userblocks_nodes.append(pydot.Node(UserBlocks_data, style="filled", shape="rectangle", label=UserBlocks_data, fillcolor="#00eeaa"))
-                    for chk in subseg.chunks:
-                        if chk.isLFH:
-                            i += 1
-                            s = "B"
-                            if chk.freeorder != -1:
-                                s = "F(%02x)" % chk.freeorder
-                                
-                                NextOffset = imm.readMemory(chk.addr+0x8,2)
-                                (NextOffset) = struct.unpack("H", NextOffset)[0]
-                                window.Log("-" * 111)
-                                window.Log("%04d: Chunk(0x%08x) -> Size: 0x%x LFHflag: 0x%x %s " % ( i, chk.addr, chk.psize,  chk.lfhflags, s),chk.addr)
-                                window.Log("%04d: Chunk(0x%08x) -> NextOffset: 0x%04x NextVirtualAddress -> UserBlocks + (NextOffset * 0x8): 0x%08x" % (i, chk.addr, NextOffset, (subseg.UserBlocks+(NextOffset*0x8))), chk.addr)
-                            
-                                if (subseg.chunks.index(chk)+1) < len(subseg.chunks):
-                                    offset_next_chunk = subseg.UserBlocks+(NextOffset*0x8)
-                                    next_chunk = subseg.chunks[subseg.chunks.index(chk)+1].addr
-                                    if offset_next_chunk == next_chunk:
-                                        window.Log("%04d: Chunk(0x%08x) ** has been validated **" % (i, chk.addr))
-                                    else:
-                                        window.Log("    --> %04d: Chunk(0x%08x) ** This free chunk has had its EntryOffset overwritten! **" % (i, chk.addr))
-                            
-                            elif chk.freeorder == -1:
-                                # dont worry about the NextVirtualAddress
-                                window.Log("%04d: Chunk(0x%08x) -> Size: 0x%x LFHflag: 0x%x %s" % ( i, chk.addr, chk.psize,  chk.lfhflags, s ),chk.addr)
-
-                        if graphic_structure:
-                            chunk_data = "(%d) chunk 0x%08x" % (i, chk.addr)
-                            if chk.freeorder == -1:
-                                chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data+"\nBUSY CHUNK", fillcolor="#0055ee"))
-                            elif chk.freeorder != -1:
-                                NextOffset = imm.readMemory(chk.addr+0x8,2)
-                                (NextOffset) = struct.unpack("H", NextOffset)[0]
-                                
-                                if (subseg.chunks.index(chk)+1) < len(subseg.chunks):
-                                    
-                                    offset_next_chunk = subseg.UserBlocks+(NextOffset*0x8)
-                                    next_chunk = subseg.chunks[subseg.chunks.index(chk)+1].addr
-                                    
-                                    if offset_next_chunk != next_chunk:
-                                        chunk_data = "(%d) chunk 0x%x\nFREE CHUNK\nNextVA: 0x%x\nEntryOffset Owned!!" % (i, chk.addr,(subseg.UserBlocks+(NextOffset*0x8)))
-                                        chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="red"))                                        
-                                    elif offset_next_chunk == next_chunk:
-                                        chunk_data = "(%d) chunk 0x%x\nFREE CHUNK\nNextVA: 0x%x" % (i, chk.addr,(subseg.UserBlocks+(NextOffset*0x8)))
-                                        chunk_nodes.append(pydot.Node(chunk_data, style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
-                    window.Log("=" * 111)
-                    
                 if graphic_structure:
-                    lfhgraph.add_node(pydot.Node("free", style="filled", shape="rectangle", label="free chunk", fillcolor="#33ccff"))
-                    lfhgraph.add_node(pydot.Node("busy", style="filled", shape="rectangle", label="busy chunk", fillcolor="#0055ee"))
+                    Userblocks_nodes = []
+                UserBlocksIndex = 0
+                for subseg in subseg_management_list:
+                    UserBlocksIndex += 1
+                    if graphic_structure:
+                        chunk_nodes = []
+                    else:
+                        chunk_nodes = False
+                    if switch["Bin_size"]:
+                        if subseg.BlockSize == int(switch["Bin_size"],16):
+                            chunk_nodes = dump_UserBlocks(UserBlocksIndex, chunk_nodes)
+                    else:
+                        chunk_nodes = dump_UserBlocks(UserBlocksIndex, chunk_nodes)
+               
                     
-                    for node in Userblocks_nodes: 
-                        lfhgraph.add_node(node)
+                    if graphic_structure:
+                        lfhgraph = pydot.Dot(graph_type='digraph')
+                        lfhgraph.add_node(pydot.Node("free", style="filled", shape="rectangle", label="free chunk", fillcolor="#33ccff"))
+                        lfhgraph.add_node(pydot.Node("busy", style="filled", shape="rectangle", label="busy chunk", fillcolor="#0055ee"))
+          
+                        UserBlocks_data = "UserBlocks 0x%08x\nSize:0x%x" % (subseg.UserBlocks,subseg.BlockSize)
+                        lfhgraph.add_node(pydot.Node(UserBlocks_data, style="filled", shape="rectangle", label=UserBlocks_data, fillcolor="#00eeaa"))
+
                         for node in chunk_nodes:
                             lfhgraph.add_node(node)
-                            if (chunk_nodes.index(node)+1) < len(chunk_nodes):
+                            if (chunk_nodes.index(node)+1) < len(chunk_nodes):                        
                                 next_chunk_label = node.__get_attribute__("label")
                                 if not re.search("FREE CHUNK", next_chunk_label):
                                     lfhgraph.add_edge(pydot.Edge(node, chunk_nodes[chunk_nodes.index(node)+1]))
                                 else:
-                                    lfhgraph.add_edge(pydot.Edge(node, chunk_nodes[chunk_nodes.index(node)+1], label="  NextOffset"))   
-            if graphic_structure:
-                lfhgraph.write_png(filename+".png")
+                                    lfhgraph.add_edge(pydot.Edge(node, chunk_nodes[chunk_nodes.index(node)+1], label="  NextOffset"))                               
+                                            
+                        if switch["Bin_size"]:
+                            if subseg.BlockSize == int(switch["Bin_size"],16):
+                                lfhgraph.write_png(filename+"-bin-%02d-%02d.png" % (subseg.BlockSize,UserBlocksIndex))
+                        else:
+                            lfhgraph.write_png(filename+"-bin-%02d-%02d.png" % (subseg.BlockSize,UserBlocksIndex))
 
 # Lookaside list dumping function
 # ===============================
@@ -1455,7 +1607,6 @@ def dump_lal(imm, pheap, graphic_structure, window, filename="lal_graph"):
     if no_chunks == 128:  
         window.Log("(-) Lookaside not in use..")
 
-
 # yes this is technically cheating, but much more realistic
 def get_heapCache_bitmap(pheap, get_chunk_dict=False):
     bit_list = {}
@@ -1612,6 +1763,7 @@ def dump_FreeListInUse(pheap, window):
             window.Log("FreeList[0x%x] = %d" % (i,b))
         i+= 1
 
+# Save the Lookaside chunks for analysing exploitable conditions
 def set_Lookaside_chunks(imm, pheap, heap):
     if pheap.Lookaside:
         for ndx in range(0, len(pheap.Lookaside)):
@@ -1621,40 +1773,17 @@ def set_Lookaside_chunks(imm, pheap, heap):
                 
                 for a in entry.getList():
                     lookaside_list = entry.getList()
-                    # get the chunk address so that we point to the header
+                    
+                    # get the previous chunk address
                     prev_chunk = lookaside_list[lookaside_list.index(a)-1]-0x8
                     
                     chunk_address = a
-                    # get the chunks self size
-                    
-                    try:
-                        chunk_size = imm.readMemory(a, 0x2)
-                        chunk_size = struct.unpack("H", chunk_size)[0]
-                        chunk_size = chunk_size*8
-                    except:
-                        chunk_size = ""
-                    try:
-                        chunk_psize = imm.readMemory(a+0x2, 0x2)
-                        chunk_psize = struct.unpack("H", chunk_psize)[0]
-                        chunk_psize = chunk_psize*8  
-                    except:
-                        chunk_psize = ""
-                                          
-                        
-                    # get the chunks cookie
-                    
-                    try:
-                        chunkCookie = imm.readMemory(a+0x4, 0x1)
-                        chunkCookie = struct.unpack("B", chunkCookie)[0]
-                    except:
-                        chunkCookie = ""
                     
                     # validate the flink!
                     flink_overwrite = False
                     try:
                         flink = imm.readMemory(a+0x8, 0x4)
                         flink = struct.unpack("L", flink)
-                        #next_chunk = flink-0x8
                     except:
                         flink_overwrite = True                    
                     
@@ -1663,10 +1792,125 @@ def set_Lookaside_chunks(imm, pheap, heap):
                         break                     
                     imm.addKnowledge("Lookasiden_chunk_%x" % chunk_address, [chunk_address, flink, prev_chunk], force_add = 1)
        
+# Save the LFH chunks for analysing exploitable conditions
+def perform_LFH_heuristics(imm, pheap, heap, window):
+    
+    """
+    perform LFH heuristics when using the 'exploit' command
+    
+    @type  imm: Debugger Object
+    @param imm: initialized debugger object
+    
+    @type  pheap: Heap Object
+    @param param: initialised heap object
 
-# set the freelist[n] for auditing
-# ================================
+    @type  heap: DWORD
+    @param heap: heap address only    
+    
+    @type  window: Windows Object
+    @param window: initialized window object
+     
+    @rtype: None    
+    
+    """
+    
+    vuln_chunks = 0
+    if pheap.LFH.LocalData:
+        for seginfo in pheap.LFH.LocalData.SegmentInfo:
+            subseg_management_list = seginfo.SubSegment
+            for subseg in subseg_management_list:
+                
+                # validate the chunks havent had there offsets overwritten..
+                chunk_validation_list = []
+                free_chunk_validation_list = []
+                for chunk in subseg.chunks:
+                    chunk_validation_list.append(chunk.addr)
+                    if chunk.freeorder != -1:
+                        free_chunk_validation_list.append(chunk.freeorder)
+                free_chunk_validation_list.sort()
+                for chk in subseg.chunks:
+                    
+                    # only validate free chunks
+                    if chk.freeorder != -1:
+                        NextOffset = imm.readMemory(chk.addr+0x8,2)
+                        (NextOffset) = struct.unpack("H", NextOffset)[0]
+                        
+                        if (subseg.chunks.index(chk)+1) < len(subseg.chunks):
+                            # calculate the next address using the NextOffset
+                            offset_next_chunk = subseg.UserBlocks+(NextOffset*0x8)
+                            
+                            # if the current chunks freeorder is the same as the last freeorder for the UserBlocks, its ok
+                            if chk.freeorder == free_chunk_validation_list[len(free_chunk_validation_list) -1]:
+                                encoded_header = imm.readMemory(chk.addr-0x8,2)
+                                (encoded_header) = struct.unpack("H", encoded_header)[0]
+                                if NextOffset == 0xffff:
+                                    # if its the last chunk and the nextoffset is 0xffff, then double check
+                                    # the rest of the header to ensure you havent overwritten it...
+                                    if encoded_header == NextOffset:
+                                        vuln_chunks += 1
+                                        window.Log("")
+                                        window.Log("(!) Detected chunk overwrite!")
+                                        window.Log("-" * 40)
+                                        window.Log("UserBlocks: 0x%08x" % (subseg.UserBlocks),subseg.UserBlocks) 
+                                        window.Log("-" * 40)
+                                        window.Log("    --> Chunk(0x%08x) ** The EntryOffset for this chunk has been overwritten! **" % (chk.addr),chk.addr)
+                                        window.Log("    --> Size: 0x%x" % chk.psize)
+                                        window.Log("    --> NextOffset: 0x%x" % NextOffset)
+                                        window.Log("(!) 1. You will need %d allocations to overwrite the FreeEntryOffset" % len(free_chunk_validation_list))
+                                        window.Log("(!) 2. Using NextOffset: 0x%x, your next controlled allocation will be at 0x%08x" % 
+                                                   (NextOffset, subseg.UserBlocks + (NextOffset * 0x8)),subseg.UserBlocks + (NextOffset * 0x8))
+                                elif NextOffset != 0xffff:
+                                    vuln_chunks += 1
+                                    window.Log("")
+                                    window.Log("(!) Detected chunk overwrite!")
+                                    window.Log("-" * 40)
+                                    window.Log("UserBlocks: 0x%08x" % (subseg.UserBlocks),subseg.UserBlocks) 
+                                    window.Log("-" * 40)
+                                    window.Log("    --> Chunk(0x%08x) ** The EntryOffset for this chunk has been overwritten! **" % (chk.addr),chk.addr)
+                                    window.Log("    --> Size: 0x%x" % chk.psize)
+                                    window.Log("    --> NextOffset: 0x%x" % NextOffset)
+                                    window.Log("(!) 1. You will need %d allocations to overwrite the FreeEntryOffset" % len(free_chunk_validation_list))
+                                    window.Log("(!) 2. Using NextOffset: 0x%x, your next controlled allocation will be at 0x%08x" % 
+                                               (NextOffset, subseg.UserBlocks + (NextOffset * 0x8)),subseg.UserBlocks + (NextOffset * 0x8))     
+                            elif offset_next_chunk not in chunk_validation_list:
+                                vuln_chunks += 1
+                                window.Log("")
+                                window.Log("(!) Detected chunk overwrite!")
+                                window.Log("-" * 40)
+                                window.Log("UserBlocks: 0x%08x" % (subseg.UserBlocks),subseg.UserBlocks) 
+                                window.Log("-" * 40)
+                                window.Log("    --> Chunk(0x%08x) ** The EntryOffset for this chunk has been overwritten! **" % (chk.addr),chk.addr)
+                                window.Log("    --> Size: 0x%x" % chk.psize)
+                                window.Log("    --> NextOffset: 0x%x" % NextOffset)
+                                window.Log("(!) 1. You will need %d allocations to overwrite the FreeEntryOffset" % len(free_chunk_validation_list))
+                                window.Log("(!) 2. Using NextOffset: 0x%x, your next controlled allocation will be at 0x%08x" % 
+                                           (NextOffset, subseg.UserBlocks + (NextOffset * 0x8)),subseg.UserBlocks + (NextOffset * 0x8))
+    # return the number of chunks overwritten
+    window.Log("")
+    window.Log("(!) Found %d overwritten chunks" % vuln_chunks)
+    window.Log("")
+    return "(!) Found %d number of Overwritten chunks" % vuln_chunks
+
+# save freelist[n] chunks for auditing later
+# ==========================================
 def set_FreeList_chunks(imm, pheap, heap):
+    
+    """
+    Save the FreeList chunks into immunities memory (NT-5.x)
+    
+    @type  imm: Debugger Object
+    @param imm: initialized debugger object
+    
+    @type  pheap: Heap Object
+    @param param: initialised heap object
+    
+    @type  heap: DWORD
+    @param heap: heap address only    
+    
+    @rtype: None
+    
+    """
+    
     for a in range(0, 128):
         entry = pheap.FreeList[a]
         e = entry[0]
@@ -1690,8 +1934,7 @@ def set_FreeList_chunks(imm, pheap, heap):
                         imm.addKnowledge("FreeListn_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
                     elif a == 0:
                         imm.addKnowledge("FreeList0_chunk_%x" % chunk_address, [a, chunk_address, chunk_blink, chunk_flink, prevchunk_address, nextchunk_address, e[0]], force_add = 1)
-                        
-
+    
 def perform_heuristics(window, imm, pheap, allocator):
     window.Log("")
     if allocator == "BackEnd":
@@ -1707,7 +1950,6 @@ def perform_heuristics(window, imm, pheap, allocator):
     vuln_freelistnchunks = 0
     for knowledge in imm.listKnowledge():
         # match on all the freelist[0] chunks we added earlier 
-        #window.Log(knowledge)
         if allocator == "BackEnd":
             if re.match("FreeList0_chunk_",knowledge):
                 vuln_freelistchunks += freelist_and_lookaside_heuristics(window, knowledge, pheap, imm, "freelist0", vuln_freelistchunks)
@@ -1720,8 +1962,6 @@ def perform_heuristics(window, imm, pheap, allocator):
         # if we have vulnerable chunks... dont keep looping
         if vuln_lookasidelistchunks >= 1:
             break
-        
-        #elif re.match("FreeListn_chunk_",knowledge):
             
     window.Log("")
     if vuln_freelistchunks > 0:
@@ -1767,7 +2007,7 @@ def perform_heuristics(window, imm, pheap, allocator):
         window.Log("(!) No exploitable cases were identified for FreeList[n]")
                                    
 
-def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False, filename="listhint_graph"):
+def dump_ListHint_and_FreeList(args, pheap, window, heap, imm, graphic_structure=False, filename="listhint_graph"):
     if graphic_structure:
         listhintgraph = pydot.Dot(graph_type='digraph')
         listhintgraph.set("ranksep", "0.75")
@@ -1790,189 +2030,199 @@ def dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure=False
         window.Log("(+) End Block information for 0x%08x" % block.address)
         window.Log("(+) Block has [0x%x] FreeLists starting at 0x%08x"  % (num_of_freelists, block.ListHints))
         window.Log("")
-        window.Log("(+) ListHints:")
-        window.Log("-------------")
-        memory = imm.readMemory( block.ListHints, num_of_freelists * 8 )
-        allocations_needed = {}
-                     
-        for a in range(0, num_of_freelists):
-            # Previous and Next Chunk of the head of the double linked list
-            (flink, heap_bucket) = struct.unpack("LL", memory[a * 0x8 : a * 0x8 + 0x8] )
-            bin_entry = a + block.BaseIndex
-            freelist_addr = block.ListHints + (bin_entry - block.BaseIndex) * 8
-            allocations = heap_bucket & 0x0000FFFF
-            allocations = allocations / 2
-            # if we have had a allocation, then there should only be 17 to go
-            if allocations > 0:
-                lfhthreshold = 0x11
-            else:
-                lfhthreshold = 0x12
-            amount_needed = lfhthreshold - allocations
-
-            if heap_bucket != 0:
-                if amount_needed in range (0x01,0x12):
-                    allocations_needed[bin_entry] = amount_needed
-                else:
-                    allocations_needed[bin_entry] = 0 
-                if heap_bucket & 1:
-                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: Enabled | Bucket => 0x%08x" % (bin_entry, flink, heap_bucket - 1), address = freelist_addr)
-                elif (heap_bucket & 0x0000FFFF) >= 0x22: #there appears to be a case where the LFH isn't activated when it should be...
-                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: ??????? | Bucket => 0x%08x" % (bin_entry, flink, heap_bucket), address = freelist_addr)
-                else:
-                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: Has had %d allocations | Needs %d more" % (bin_entry, flink, allocations, amount_needed), address = freelist_addr)
-            elif heap_bucket == 0:
-                    
-                if emptybins and bin_entry != 0x1 and bin_entry != 0x0 and flink == 0:
-                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: Bin is Empty!" % (bin_entry, flink), address = freelist_addr)
-                elif bin_entry != 0x1 and bin_entry != 0x0 and bin_entry == (block.ArraySize-0x1) and flink != 0:
-                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: last entry contains large chunks!" % (bin_entry, flink), address = freelist_addr)
-                elif flink != 0 and bin_entry != 0x1 and bin_entry != 0x0:
-                    window.Log("Bin[0x%04x] | Flink => 0x%08x :: Has had %d allocations | Needs %d more" % (bin_entry, flink, allocations, amount_needed), address = freelist_addr)
-                    allocations_needed[bin_entry] = 0
-                # amount needed should always be between 0-18
-                if amount_needed in range (0x01,0x12):
-                    allocations_needed[bin_entry] = amount_needed
-                    
-            if flink != 0:
-                window.Log("    -> Bin contains chunks")
-                            
-        window.Log("")
-        window.Log("(+) FreeList:")
-        window.Log("-------------")
-        for a in range(block.BaseIndex, num_of_freelists): # num_of_freelists
-            entry= block.FreeList[a]
-            e=entry[0]
-            first_entry = entry[0]
-            nodes = []
-            overwrite_flink_blink = False
-            overwrite_size = False
-            if e[0]:
-                window.Log("Bin[0x%04x]    0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (a+block.BaseIndex, e[0], e[1], e[2]), address = e[0])
-                # logic to detect overwrite via the size (decode the header on the fly)
-                encoded_header = imm.readMemory(e[0]-0x8,0x4)
-                (encoded_header) = struct.unpack("L", encoded_header) 
-                result = "%x" % (encoded_header[0] ^ pheap.EncodingKey)
-                # chunks of size 0x7f or 0x7ff (FreeList[0] will NOT have their size validated for obvious reasons...)
-                if (int(result[len(result)-4:len(result)],16) != a+block.BaseIndex and (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff):
-                    window.Log("               -> Detected chunk size overwrite!")
-                    overwrite_size = True
-                    if e[1] == e[2]:
-                        overwrite_flink_blink = True
-                        window.Log("               -> Detected the flink/blink to be overwritten as well!") 
-                elif (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff:
-                    window.Log("Chunk:         0x%08x has had its size validated correctly" % e[0])
-                    if e[1] == e[2]:
-                        overwrite_flink_blink = True
-                        window.Log("               -> Detected flink/blink overwrite without overewriting the size!? Do you have a 4-n byte write!?")                    
-
-                if (int(a+block.BaseIndex) != 0x7f and int(a+block.BaseIndex) != 0x7ff):
-                    chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a+block.BaseIndex)  
- 
-                # we have to get the calculated size if its like FreeList[0]...
-                elif (int(a+block.BaseIndex) == 0x7f or int(a+block.BaseIndex) == 0x7ff):      
-                    chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],int(result[len(result)-4:len(result)],16))
-                
-                if graphic_structure:
-                    if overwrite_flink_blink and not overwrite_size:
-                        nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nflink/blink are owned!", fillcolor="red"))
-                    elif overwrite_flink_blink and overwrite_size:
-                        nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nsize and flink/blink are owned!", fillcolor="red"))
-                    elif not overwrite_flink_blink and not overwrite_size:
-                        nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
-                    
-                # if more than one entries exists, loop over them and add them...
-                if len(entry[1:]) > 1:
-                    for e in entry[1:]:
-                        # logic to detect overwrite via the size (decode the header on the fly)
-                        encoded_header = imm.readMemory(e[0]-0x8,0x4)
-                        (encoded_header) = struct.unpack("L", encoded_header) 
-                        result = "%x" % (encoded_header[0] ^ pheap.EncodingKey)
-                        if (int(result[len(result)-4:len(result)],16) != a+block.BaseIndex and (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff):
-                            window.Log("    -> Detected chunk size overwrite!")
-                            overwrite_size = True
-                            if e[1] == e[2]:
-                                window.Log("               -> Detected the flink/blink to be overwritten as well!")
-                                overwrite_flink_blink = True
-                        elif (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff:
-                            window.Log("Chunk:         0x%08x has had its size validated correctly" % e[0])
-                            if e[1] == e[2]:
-                                window.Log("    -> Detected flink/blink overwrite without overewriting the size!? Do you have a 4-n byte write!?")                         
-                                overwrite_flink_blink = True
-                        if (int(a+block.BaseIndex) != 0x7f and (int(a+block.BaseIndex)) != 0x7ff):
-                            chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a+block.BaseIndex)    
-                        # we have to get the calculated size if its like FreeList[0]...
-                        elif (int(a+block.BaseIndex) == 0x7f and int(a+block.BaseIndex) == 0x7ff):
-                            chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],int(result[len(result)-4:len(result)],16))
-                        window.Log("               0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (e[0], e[1], e[2]), address= e[0])                          
-                                     
-                        if graphic_structure:
-                            # as long as the first entry is not the same as the already added node..
-                            if first_entry[0] != e[0]:
-                                if overwrite_flink_blink and not overwrite_size:
-                                    nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nflink/blink are owned!", fillcolor="red"))
-                                elif overwrite_flink_blink and overwrite_size:
-                                    nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nsize and flink/blink are owned!", fillcolor="red"))
-                                elif not overwrite_size and not overwrite_flink_blink:
-                                    nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))    
-            if graphic_structure:
-                if a not in list_hint_dict:
-                    list_hint_dict[a] = nodes
-                # no matter how many allocations, you will never trigger LFH
-                if a == 127:
-                    list_data = "ListHint[0x%x]\nNo amount of allocations will\ntrigger LFH for this bin" % (a) 
-                elif a in allocations_needed and allocations_needed[a] == 0:
-                    list_data = "ListHint[0x%x]\nNo. of allocations to LFH is unknown" % (a)
-                elif a in allocations_needed:
-                    list_data = "ListHint[0x%x]\nNo. of allocations to LFH: %d" % (a,allocations_needed[a])
-                else:
-                    list_data = "ListHint[0x%x]" % (a)
-                ListHint_nodes[a] = pydot.Node("ListHint[0x%x]" % a, style="filled", shape="rectangle", label=list_data, fillcolor="#66FF66")
         
-        if graphic_structure:
-            k = 0
-            for listhintnode in ListHint_nodes.keys():
-                
-                nodes_to_add = list_hint_dict[k]
-                if len(nodes_to_add) > 0:
+        if "-l" in args or "-L" in args: 
+            window.Log("(+) ListHints:")
+            window.Log("-------------")
+            memory = imm.readMemory( block.ListHints, num_of_freelists * 8 )
+            allocations_needed = {}
+                     
+            for a in range(0, num_of_freelists):
+                # Previous and Next Chunk of the head of the double linked list
+                (flink, heap_bucket) = struct.unpack("LL", memory[a * 0x8 : a * 0x8 + 0x8] )
+                bin_entry = a + block.BaseIndex
+                freelist_addr = block.ListHints + (bin_entry - block.BaseIndex) * 8
+                allocations = heap_bucket & 0x0000FFFF
+                allocations = allocations / 2
+                # if we have had a allocation, then there should only be 17 to go
+                if allocations > 0:
+                    lfhthreshold = 0x11
+                else:
+                    lfhthreshold = 0x12
+                amount_needed = lfhthreshold - allocations
+    
+                if heap_bucket != 0:
+                    if amount_needed in range (0x01,0x12):
+                        allocations_needed[bin_entry] = amount_needed
+                    else:
+                        allocations_needed[bin_entry] = 0 
+                    if heap_bucket & 1:
+                        window.Log("Bin[0x%04x] | Flink => 0x%08x :: Enabled | Bucket => 0x%08x" % (bin_entry, flink, heap_bucket - 1), address = freelist_addr)
+                    elif (heap_bucket & 0x0000FFFF) >= 0x22: #there appears to be a case where the LFH isn't activated when it should be...
+                        window.Log("Bin[0x%04x] | Flink => 0x%08x :: ??????? | Bucket => 0x%08x" % (bin_entry, flink, heap_bucket), address = freelist_addr)
+                    else:
+                        window.Log("Bin[0x%04x] | Flink => 0x%08x :: Has had %d allocations | Needs %d more" % (bin_entry, flink, allocations, amount_needed), address = freelist_addr)
+                elif heap_bucket == 0:
+                        
+                    if bin_entry != 0x1 and bin_entry != 0x0 and flink == 0:
+                        window.Log("Bin[0x%04x] | Flink => 0x%08x :: Bin is Empty!" % (bin_entry, flink), address = freelist_addr)
+                    elif bin_entry != 0x1 and bin_entry != 0x0 and bin_entry == (block.ArraySize-0x1) and flink != 0:
+                        window.Log("Bin[0x%04x] | Flink => 0x%08x :: last entry contains large chunks!" % (bin_entry, flink), address = freelist_addr)
+                    elif flink != 0 and bin_entry != 0x1 and bin_entry != 0x0:
+                        window.Log("Bin[0x%04x] | Flink => 0x%08x :: Has had %d allocations | Needs %d more" % (bin_entry, flink, allocations, amount_needed), address = freelist_addr)
+                        allocations_needed[bin_entry] = 0
+                    # amount needed should always be between 0-18
+                    if amount_needed in range (0x01,0x12):
+                        allocations_needed[bin_entry] = amount_needed
+                        
+                if flink != 0:
+                    window.Log("    -> Bin contains chunks")
+                          
+        if "-f" in args or "-F" in args: 
+                                 
+            window.Log("")
+            window.Log("(+) FreeList:")
+            window.Log("-------------")
+            for a in range(block.BaseIndex, num_of_freelists): # num_of_freelists
+                entry= block.FreeList[a]
+                e=entry[0]
+                first_entry = entry[0]
+                nodes = []
+                overwrite_flink_blink = False
+                overwrite_size = False
+                if e[0]:
+                    window.Log("Bin[0x%04x]    0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (a+block.BaseIndex, e[0], e[1], e[2]), address = e[0])
+                    # logic to detect overwrite via the size (decode the header on the fly)
+                    encoded_header = imm.readMemory(e[0]-0x8,0x4)
+                    (encoded_header) = struct.unpack("L", encoded_header) 
+                    result = "%x" % (encoded_header[0] ^ pheap.EncodingKey)
+                    # chunks of size 0x7f or 0x7ff (FreeList[0] will NOT have their size validated for obvious reasons...)
+                    if (int(result[len(result)-4:len(result)],16) != a+block.BaseIndex and (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff):
+                        window.Log("               -> Detected chunk size overwrite!")
+                        overwrite_size = True
+                        if e[1] == e[2]:
+                            overwrite_flink_blink = True
+                            window.Log("               -> Detected the flink/blink to be overwritten as well!") 
+                    elif (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff:
+                        window.Log("Chunk:         0x%08x has had its size validated correctly" % e[0])
+                        if e[1] == e[2]:
+                            overwrite_flink_blink = True
+                            window.Log("               -> Detected flink/blink overwrite without overewriting the size!? Do you have a 4-n byte write!?")                    
+    
+                    if (int(a+block.BaseIndex) != 0x7f and int(a+block.BaseIndex) != 0x7ff):
+                        chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a+block.BaseIndex)  
+     
+                    # we have to get the calculated size if its like FreeList[0]...
+                    elif (int(a+block.BaseIndex) == 0x7f or int(a+block.BaseIndex) == 0x7ff):      
+                        chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],int(result[len(result)-4:len(result)],16))
                     
-                    if k not in chunk_nodes:
-                        chunk_nodes.append(k)
+                    if graphic_structure:
+                        if overwrite_flink_blink and not overwrite_size:
+                            nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nflink/blink are owned!", fillcolor="red"))
+                        elif overwrite_flink_blink and overwrite_size:
+                            nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nsize and flink/blink are owned!", fillcolor="red"))
+                        elif not overwrite_flink_blink and not overwrite_size:
+                            nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))
                         
-                    listhintgraph.add_node(ListHint_nodes[listhintnode])
-                    # link to the first chunk in the Bin
-                    # if statement not working, not sure why.... alternate fix is using used_nodes array
-                    if not listhintgraph.get_edge(ListHint_nodes[listhintnode], nodes_to_add[0]):   
-                        edge = pydot.Edge(ListHint_nodes[listhintnode], nodes_to_add[0])
-                        # needs to be check against multiple FreeList's
-                        # checks to see if the ListHint Entry and the first chunk have been added to the node_list
-                        # if then have, then they already have an edge, so dont add a second edge (needed for multiple BlocksIndex)
-                        if (node_list.count(ListHint_nodes[listhintnode]) < 1 and node_list.count(nodes_to_add[0]) < 1):
-                            listhintgraph.add_edge(edge)
-                            node_list.append(ListHint_nodes[listhintnode])
-                            node_list.append(nodes_to_add[0])
-                    j = 0
-                    for node in nodes_to_add:
-                        listhintgraph.add_node(node)
+                    # if more than one entries exists, loop over them and add them...
+                    if len(entry[1:]) > 1:
+                        for e in entry[1:]:
+                            # logic to detect overwrite via the size (decode the header on the fly)
+                            encoded_header = imm.readMemory(e[0]-0x8,0x4)
+                            (encoded_header) = struct.unpack("L", encoded_header) 
+                            result = "%x" % (encoded_header[0] ^ pheap.EncodingKey)
+                            if (int(result[len(result)-4:len(result)],16) != a+block.BaseIndex and (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff):
+                                window.Log("    -> Detected chunk size overwrite!")
+                                overwrite_size = True
+                                if e[1] == e[2]:
+                                    window.Log("               -> Detected the flink/blink to be overwritten as well!")
+                                    overwrite_flink_blink = True
+                            elif (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff:
+                                window.Log("Chunk:         0x%08x has had its size validated correctly" % e[0])
+                                if e[1] == e[2]:
+                                    window.Log("    -> Detected flink/blink overwrite without overewriting the size!? Do you have a 4-n byte write!?")                         
+                                    overwrite_flink_blink = True
+                            if (int(a+block.BaseIndex) != 0x7f and (int(a+block.BaseIndex)) != 0x7ff):
+                                chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],a+block.BaseIndex)    
+                            # we have to get the calculated size if its like FreeList[0]...
+                            elif (int(a+block.BaseIndex) == 0x7f and int(a+block.BaseIndex) == 0x7ff):
+                                chunk_data = "Chunk: 0x%08x\nFlink: 0x%08x\nBlink: 0x%08x\nSize: 0x%x" % (e[0],e[1], e[2],int(result[len(result)-4:len(result)],16))
+                            window.Log("               0x%08x -> [ Flink: 0x%08x | Blink: 0x%08x ] " % (e[0], e[1], e[2]), address= e[0])                          
+                                         
+                            if graphic_structure:
+                                # as long as the first entry is not the same as the already added node..
+                                if first_entry[0] != e[0]:
+                                    if overwrite_flink_blink and not overwrite_size:
+                                        nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nflink/blink are owned!", fillcolor="red"))
+                                    elif overwrite_flink_blink and overwrite_size:
+                                        nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data+"\nsize and flink/blink are owned!", fillcolor="red"))
+                                    elif not overwrite_size and not overwrite_flink_blink:
+                                        nodes.append(pydot.Node("chunk 0x%08x" % e[0], style="filled", shape="rectangle", label=chunk_data, fillcolor="#33ccff"))    
+                if graphic_structure:
+                    if a not in list_hint_dict:
+                        list_hint_dict[a] = nodes
+                    # no matter how many allocations, you will never trigger LFH
+                    if a == 127:
+                        list_data = "ListHint[0x%x]\nNo amount of allocations will\ntrigger LFH for this bin" % (a) 
+                    elif a in allocations_needed and allocations_needed[a] == 0:
+                        list_data = "ListHint[0x%x]\nNo. of allocations to LFH is unknown" % (a)
+                    elif a in allocations_needed:
+                        list_data = "ListHint[0x%x]\nNo. of allocations to LFH: %d" % (a,allocations_needed[a])
+                    else:
+                        list_data = "ListHint[0x%x]" % (a)
+                    ListHint_nodes[a] = pydot.Node("ListHint[0x%x]" % a, style="filled", shape="rectangle", label=list_data, fillcolor="#66FF66")
+            
+            
+        
+            if graphic_structure:
+                k = 0
+                for listhintnode in ListHint_nodes.keys():
+                    
+                    nodes_to_add = list_hint_dict[k]
+                    if len(nodes_to_add) > 0:
                         
-                        if j+1 <= len(nodes_to_add)-1:
-                            edge = pydot.Edge(node, nodes_to_add[j+1])
-                            node_list.append(node)
-                            if not node_list.count(node) == 2 and not node_list.count(nodes_to_add[j+1]) == 2:
-                                listhintgraph.add_edge(edge)
+                        if k not in chunk_nodes:
+                            chunk_nodes.append(k)
                             
-                        if ((chunk_nodes.index(k)-1) >= 0):
-                            prev_nodes_to_link = list_hint_dict[chunk_nodes[chunk_nodes.index(k)-1]]
-                            # check the previous node to see if there is an edge, if not, add it
-                            if not listhintgraph.get_edge(prev_nodes_to_link[-1],node) and nodes_to_add.index(node) == 0:     
-                                edge = pydot.Edge(prev_nodes_to_link[-1],node)
-                                node_list.append(prev_nodes_to_link[-1])
-                                if not node_list.count(prev_nodes_to_link[-1]) >= 2:
+                        listhintgraph.add_node(ListHint_nodes[listhintnode])
+                        # link to the first chunk in the Bin
+                        # if statement not working, not sure why.... alternate fix is using used_nodes array
+                        if not listhintgraph.get_edge(ListHint_nodes[listhintnode], nodes_to_add[0]):   
+                            edge = pydot.Edge(ListHint_nodes[listhintnode], nodes_to_add[0])
+                            # needs to be check against multiple FreeList's
+                            # checks to see if the ListHint Entry and the first chunk have been added to the node_list
+                            # if then have, then they already have an edge, so dont add a second edge (needed for multiple BlocksIndex)
+                            if (node_list.count(ListHint_nodes[listhintnode]) < 1 and node_list.count(nodes_to_add[0]) < 1):
+                                listhintgraph.add_edge(edge)
+                                node_list.append(ListHint_nodes[listhintnode])
+                                node_list.append(nodes_to_add[0])
+                        j = 0
+                        for node in nodes_to_add:
+                            listhintgraph.add_node(node)
+                            
+                            if j+1 <= len(nodes_to_add)-1:
+                                edge = pydot.Edge(node, nodes_to_add[j+1])
+                                node_list.append(node)
+                                if not node_list.count(node) == 2 and not node_list.count(nodes_to_add[j+1]) == 2:
                                     listhintgraph.add_edge(edge)
-                        j+=1
-                k+=1
-        if graphic_structure:
-            listhintgraph.set_graphviz_executables(paths)
-            listhintgraph.write_png(filename+".png")
+                                
+                            if ((chunk_nodes.index(k)-1) >= 0):
+                                prev_nodes_to_link = list_hint_dict[chunk_nodes[chunk_nodes.index(k)-1]]
+                                # check the previous node to see if there is an edge, if not, add it
+                                if not listhintgraph.get_edge(prev_nodes_to_link[-1],node) and nodes_to_add.index(node) == 0:     
+                                    edge = pydot.Edge(prev_nodes_to_link[-1],node)
+                                    node_list.append(prev_nodes_to_link[-1])
+                                    if not node_list.count(prev_nodes_to_link[-1]) >= 2:
+                                        listhintgraph.add_edge(edge)
+                            j+=1
+                    k+=1
+            if graphic_structure:
+                listhintgraph.set_graphviz_executables(paths)
+                listhintgraph.write_png(filename+".png")
+                
+    if graphic_structure and not "-l" in args and not "-f" in args:
+        window.Log("(-) You must specify argument -l/-L or -f/-F to graph the ListHints or FreeList")
+    
         
 def dump_freelist(imm, pheap, window, heap, graphic_structure=False, filename="freelist_graph"):
     if graphic_structure:
@@ -2186,64 +2436,133 @@ def dumpchunk_info(chunk, show_detail, window):
                 window.Log("        -> hex: \\x%s" % dump[a][0].rstrip().replace(" ", "\\x")) 
                 window.Log("        -> ascii: %s" % (dump[a][1]))
 
-def dump_function_pointers(window, imm, writable_segment, patch=False, restore=False, address_to_patch=False):
-    j = 0
-    g = 0
-    memory_dict = {}
-    # patch the memory in the .data segment
-    if patch and address_to_patch:
-        if address_to_patch != "all":
-            # patch with 0x41's
-            imm.writeLong( address_to_patch, 0x41414141 )
-            return "(+) Patched address %s with 0x%x" % (address_to_patch, 0x41414141)
-    elif restore and address_to_patch:
-        restore_dict = imm.getKnowledge("function_pointers")
-        if address_to_patch == "all":
-            for k,v in restore_dict.iteritems():
-                g += 1
-                window.Log("-" * 60)
-                window.Log("(%04d) Pointer      : 0x%08x" % (g,k),k)
-                window.Log("       Function     : 0x%08x" % (v),v)
-                window.Log("       Module Name  : %s" % imm.getModuleByAddress(v).getName())
-                window.Log("       First Opcode : %s" % imm.disasm(v).getDisasm())
-                imm.writeLong( k, v )
-            return "(+) Restored all function pointer(s) to there original values"
-        elif address_to_patch != "all":
-            for k,v in restore_dict.iteritems():
+def analyse_function_pointers(args, window, imm, patch=False, patch_val=False, restore=False, restore_val=False):
+
+    fn_ptr = []
+    exclude = []
+    ndx = INDEXER  
+    # create the datatype object    
+    dt = libdatatype.DataTypes(imm)
                 
-                if k == address_to_patch:
-                    imm.writeLong( address_to_patch, v )
-            return "(+) Restored 0x%08x function pointer to its original value" % address_to_patch
-    
-    page = imm.getMemoryPageByAddress( writable_segment )
-    addr = page.getBaseAddress()
-    mem = imm.readMemory( page.getBaseAddress(), page.getSize() )
-    # Discovering Function Pointers (taken from immunity's code)
-    dt = libdatatype.DataTypes( imm )
-    ret = dt.Discover( mem, addr, what = 'pointers' )
-    if ret:
-        for obj in ret: 
-            if obj.isFunctionPointer() and obj.address:
-                j += 1
-                window.Log("-" * 60)
-                window.Log("(%04d) Pointer      :  0x%08x" % (j, obj.address),obj.address)
-                function = imm.readMemory(obj.address, 4)
-                (function) = struct.unpack("L", function)
-                
-                window.Log("       Function     : 0x%08x" % (function),function)
-                window.Log("       Module Name  : %s" % imm.getModuleByAddress(function).getName())
-                window.Log("       First Opcode : %s" % imm.disasm(function).getDisasm())
-                # store it into a dict object
-                memory_dict[obj.address]= function 
-                if address_to_patch:
-                    imm.writeLong( obj.address, 0x41414141 )
-                    window.Log("       pointer patched!")
+    # get the address and size
+    if (patch_val == "all" or restore_val == "all") or (not patch_val and not restore_val):
+        try:
+            addr = int(args[args.index("-a")+1],16)
+            size = int(args[args.index("-s")+1],16)
+            mem = imm.readMemory( addr, size )
+            if not mem:
+                return "(-) Error: Couldn't read any memory at address: 0x%08x" % addr
+            ret = dt.Discover( mem, addr, what = 'pointers' )
+        except:
+            window.Log("")
+            window.Log("(-) You need to specify the address and size using -a and -s")
+            return "(-) You need to specify the address and size using -a and -s"
+
+    # we are discovering..
+    if not patch and not restore:
+        fp=0
+        for obj in ret:
+            if obj.isFunctionPointer():
+                fp+=1
+                            
+        window.Log("")
+        window.Log( "(+) Found %d function pointers" % fp )
+        window.Log("")
                     
-        # save it so we can restore it later
-        imm.addKnowledge("function_pointers", memory_dict, force_add = 1)
-        return "(+) Patched %s addresses with 0x%x" % (address_to_patch, 0x41414141)
-        
-    return "(+) Dumped all IAT pointers from %s" % imm.getDebuggedName()    
+        for obj in ret:
+            if obj.isFunctionPointer():
+                msg = "0x%08x -> 0x%08x in %s at the %s section" % (obj.address, obj.data, obj.mem.getOwner(), obj.mem.section)
+                window.Log( "%s" % ( msg ), address = obj.address)
+                
+        window.Log("-" * 60)
+        return "(+) Dumped function pointers!"
+    # we are patching...
+    elif patch and not restore:
+                    
+        # lets save all of the function pointers in case we have to restore..
+        memory_dict = {}
+                     
+        # we are patching all pointers
+        if patch_val == "all":
+            if "-e" in args:
+                exclude = []
+                exclude_addresses = args[args.index("-e")+1]
+                exclude_list = exclude_addresses.split(",")
+            for e in exclude_list:
+                exclude.append(int(e,16))
+                
+            window.Log("%s" % exclude)           
+            if ret:
+                window.Log("")
+                for obj in ret:
+                    if obj.isFunctionPointer() and obj.address not in exclude:
+                        # remember what we are modifying
+                        memory_dict[obj.address] = obj.data
+                        window.Log( "(+) Modifying pointer: 0x%08x to 0x%08x" % (obj.address, ndx), obj.address)
+                        imm.writeLong( obj.address, ndx )
+                        ndx += 1
+                        fn_ptr.append( obj )
+                            
+                # save the function pointers
+                imm.addKnowledge("fps_%s" % addr, memory_dict, force_add = 1)
+                hook = FunctionTriggeredHook( fn_ptr, window )
+                hook.add( "modptr_%08x" % addr )
+                window.Log("-" * 47)
+                return "(+) Hooking on %d Functions" % len( fn_ptr )
+            else:
+                return "(-) No Function pointers found at address 0x%08x" % patch_val
+                        
+        # we are patching a specific pointer
+        elif patch_val != "all": 
+            patch_val = int(patch_val,16)                      
+            mem = imm.readMemory( patch_val, 4 )
+            if not mem:
+                return "(-) Error: Couldn't read any memory at address: 0x%08x" % addr
+            ret = dt.Discover( mem, patch_val, what = 'pointers' )
+            if ret:
+                for obj in ret:
+                    if obj.isFunctionPointer() and obj.address == patch_val:
+                        memory_dict[obj.address] = obj.data
+                        window.Log("")
+                        window.Log( "(+) Modifying pointer: 0x%08x to 0x%08x" % (obj.address, ndx), obj.address)
+                        imm.writeLong( obj.address, ndx )
+                        ndx += 1
+                        fn_ptr.append( obj )
+                                    
+                # save the function pointer we are patching
+                imm.addKnowledge("fp_%x" % patch_val, memory_dict, force_add = 1)
+                hook = FunctionTriggeredHook( fn_ptr, window )
+                hook.add( "modptr_%08x" % patch_val )
+                window.Log("-" * 47)
+                return "Hooking on function pointer 0x%08x" % obj.address
+            else:
+                window.Log("")
+                window.Log("(-) No Function pointer found at address 0x%08x" % patch_val)
+                window.Log("")
+                return "(-) No Function pointer found at address 0x%08x" % patch_val
+                        
+    # we are restoring...
+    elif restore and not patch:
+                    
+        restore_dict = False
+        for knowledge in imm.listKnowledge():
+            if re.match("fp", knowledge):
+                restore_dict = imm.getKnowledge(knowledge)
+                imm.forgetKnowledge(knowledge)
+                    
+        if restore_dict:
+            for faddy, pointer in restore_dict.iteritems():
+                imm.writeLong( faddy, pointer )
+            window.Log("")   
+            window.Log("(+) Restored function pointer(s)...")
+            window.Log("-" * 40)
+            return "(+) Restored function pointer(s)..."
+        else:
+            window.Log("")
+            window.Log("(!) Function pointer already restored...")
+            window.Log("-" * 40)
+            return "(!) Function pointer already restored..."
+
 
 def dump_segment_structure(pheap, window, imm, heap):
     """
@@ -2334,47 +2653,82 @@ def analyse_heap(heap, imm, window):
         window.Log("Heap structure @ 0x%08x" % heap)
         window.Log("--------------------------------------------------")
         window.Log("+0x000 Entry                          : 0x%08x" % heap, heap)
-        window.Log("+0x008 Signature                      : 0x%08x" % pheap.Signature, pheap.Signature)
-        window.Log("+0x00c Flags                          : 0x%08x" % pheap.Flags, pheap.Flags)
-        window.Log("+0x010 Forceflags                     : 0x%08x" % pheap.ForceFlags, pheap.ForceFlags)
-        window.Log("+0x014 VirtualMemoryThreshold         : 0x%08x" % pheap.VirtualMemoryThreshold, pheap.VirtualMemoryThreshold) 
-        window.Log("+0x018 SegmentReserve                 : 0x%08x" % pheap.SegmentReserve, pheap.SegmentReserve)
-        window.Log("+0x01C SegmentCommit                  : 0x%08x" % pheap.SegmentCommit, pheap.SegmentCommit)
-        if imm.getOsVersion() == "xp":
+
+        if OS < 6.0:
+            window.Log("+0x008 Signature                      : 0x%08x" % pheap.Signature, pheap.Signature)
+            window.Log("+0x00c Flags                          : 0x%08x" % pheap.Flags, pheap.Flags)
+            window.Log("+0x010 Forceflags                     : 0x%08x" % pheap.ForceFlags, pheap.ForceFlags)
+            window.Log("+0x014 VirtualMemoryThreshold         : 0x%08x" % pheap.VirtualMemoryThreshold, pheap.VirtualMemoryThreshold) 
+            window.Log("+0x018 SegmentReserve                 : 0x%08x" % pheap.SegmentReserve, pheap.SegmentReserve)
+            window.Log("+0x01C SegmentCommit                  : 0x%08x" % pheap.SegmentCommit, pheap.SegmentCommit)
+        elif OS >= 6.0:
+            window.Log("+0x008 SegmentSignature               : 0x%08x" % pheap.Signature, pheap.Signature)
+            window.Log("+0x00c SegmentFlags                   : 0x%08x" % pheap.Flags, pheap.Flags)
+            SegmentListEntry = imm.readMemory(heap+0x14, 4)
+            SegmentListEntry = struct.unpack("L", SegmentListEntry)[0]
+            #window.Log("+0x010 SegmentListEntry               : 0x%08x" % pheap.ForceFlags, pheap.ForceFlags)
+            window.Log("+0x010 SegmentListEntry               : 0x%08x" % SegmentListEntry, SegmentListEntry)
+            window.Log("+0x018 Heap                           : 0x%08x" % pheap.SegmentReserve, pheap.SegmentReserve)
+            window.Log("+0x01C BaseAddress                    : 0x%08x" % pheap.SegmentCommit, pheap.SegmentCommit)
+        if OS < 6.0:
             window.Log("+0x020 DeCommitFreeBlockThreshold     : 0x%08x" % pheap.DeCommitFreeBlockThreshold, pheap.DeCommitFreeBlockThreshold)
             window.Log("+0x024 DeCommitTotalBlockThreshold    : 0x%08x" % pheap.DeCommitTotalBlockThreshold, pheap.DeCommitTotalBlockThreshold)
-        if imm.getOsVersion() == "7":
+            window.Log("+0x028 TotalFreeSize                  : 0x%08x" % pheap.TotalFreeSize, pheap.TotalFreeSize)
+        elif OS >= 6.0:
             window.Log("+0x020 NumberOfPages                  : 0x%08x" % pheap.NumberOfPages, pheap.NumberOfPages)
             window.Log("+0x024 FirstEntry                     : 0x%08x" % pheap.FirstEntry, pheap.FirstEntry)
-        window.Log("+0x028 Total Free Size                : 0x%08x" % pheap.TotalFreeSize, pheap.TotalFreeSize)
-        if imm.getOsVersion() == "xp":
+            window.Log("+0x028 LastValidEntry                 : 0x%08x" % pheap.TotalFreeSize, pheap.TotalFreeSize)
+            
+        if OS < 6.0:
             window.Log("+0x02c MaximumAllocationSize          : 0x%08x" % pheap.MaximumAllocationSize, pheap.MaximumAllocationSize)
-        elif imm.getOsVersion() == "7":
+        elif OS >= 6.0:
             NumberOfUnCommittedPages = imm.readMemory(heap+0x2c, 4)
             NumberOfUnCommittedPages = struct.unpack("L", NumberOfUnCommittedPages)[0]
             window.Log("+0x02c NumberOfUnCommittedPages       : 0x%08x" % NumberOfUnCommittedPages, NumberOfUnCommittedPages)
+        
         # libheap does not have some members, so we are on our own
         ProcessHeapsListIndex = imm.readMemory(heap+0x30, 2)
         ProcessHeapsListIndex = struct.unpack("H", ProcessHeapsListIndex)[0]
-                    
-        window.Log("+0x030 ProcessHeapsListIndex          : 0x%08x" % ProcessHeapsListIndex, ProcessHeapsListIndex)
-        window.Log("+0x032 HeaderValidateLength           : 0x%08x" % pheap.HeaderValidateLength, pheap.HeaderValidateLength)
-        window.Log("+0x034 HeaderValidateCopy             : 0x%08x" % pheap.HeaderValidateCopy, pheap.HeaderValidateCopy)
-        window.Log("+0x038 NextAvailableTagIndex          : 0x%08x" % pheap.NextAvailableTagIndex, pheap.NextAvailableTagIndex)
-        window.Log("+0x03a MaximumTagIndex                : 0x%08x" % pheap.MaximumTagIndex, pheap.MaximumTagIndex)
-        window.Log("+0x03c TagEntries                     : 0x%08x" % pheap.TagEntries, pheap.TagEntries)
+        if OS < 6.0:            
+            window.Log("+0x030 ProcessHeapsListIndex          : 0x%08x" % ProcessHeapsListIndex, ProcessHeapsListIndex)
+        elif OS >= 6.0:
+            window.Log("+0x030 NumberOfUnCommittedRanges      : 0x%08x" % ProcessHeapsListIndex, ProcessHeapsListIndex)
+            # libheap does not have some members, so we are on our own
+            SegmentAllocatorBackTraceIndex = imm.readMemory(heap+0x34, 2)
+            SegmentAllocatorBackTraceIndex = struct.unpack("H", SegmentAllocatorBackTraceIndex)[0]
+
+            Reserved = imm.readMemory(heap+0x36, 2)
+            Reserved = struct.unpack("H", Reserved)[0]
+
+            UCRSegmentList = imm.readMemory(heap+0x38, 4)
+            UCRSegmentList = struct.unpack("L", UCRSegmentList)[0]
+            
+            UCRSegmentList1 = imm.readMemory(heap+0x3c, 4)
+            UCRSegmentList1 = struct.unpack("L", UCRSegmentList1)[0]
+                                    
+            window.Log("+0x034 SegmentAllocatorBackTraceIndex : 0x%08x" % SegmentAllocatorBackTraceIndex, SegmentAllocatorBackTraceIndex)
+            window.Log("+0x036 Reserved                       : 0x%08x" % Reserved, Reserved)
+            window.Log("+0x038 UCRSegmentList                 : 0x%08x%08x" % (UCRSegmentList,UCRSegmentList1))
         # uncommited range segments
-        if imm.getOsVersion() == "xp":
+        if OS < 6.0:
+            window.Log("+0x032 HeaderValidateLength           : 0x%08x" % pheap.HeaderValidateLength, pheap.HeaderValidateLength)
+            window.Log("+0x034 HeaderValidateCopy             : 0x%08x" % pheap.HeaderValidateCopy, pheap.HeaderValidateCopy)
+            window.Log("+0x038 NextAvailableTagIndex          : 0x%08x" % pheap.NextAvailableTagIndex, pheap.NextAvailableTagIndex)
+            window.Log("+0x03a MaximumTagIndex                : 0x%08x" % pheap.MaximumTagIndex, pheap.MaximumTagIndex)
+            window.Log("+0x03c TagEntries                     : 0x%08x" % pheap.TagEntries, pheap.TagEntries)
+            
             window.Log("+0x040 UCRSegments                    : 0x%08x" % pheap.UCRSegments, pheap.UCRSegments)
             window.Log("+0x044 UnusedUncommittedRanges        : 0x%08x" % pheap.UnusedUnCommittedRanges, pheap.UnusedUnCommittedRanges)
-        elif imm.getOsVersion() == "7":
+            window.Log("+0x048 AlignRound                     : 0x%08x" % pheap.AlignRound, pheap.AlignRound)
+            window.Log("+0x04c AlignMask                      : 0x%08x" % pheap.AlignMask, pheap.AlignMask)
+        elif OS >= 6.0:
             window.Log("+0x040 Flags                          : 0x%08x" % pheap.Flags, pheap.Flags)
             window.Log("+0x044 ForceFlags                     : 0x%08x" % pheap.ForceFlags, pheap.ForceFlags)
-        window.Log("+0x048 AlignRound                     : 0x%08x" % pheap.AlignRound, pheap.AlignRound)
-        window.Log("+0x04c AlignMask                      : 0x%08x" % pheap.AlignMask, pheap.AlignMask)
+            window.Log("+0x048 CompatibilityFlags             : 0x%08x" % pheap.AlignRound, pheap.AlignRound)
+            window.Log("+0x04c EncodeFlagMask                 : 0x%08x" % pheap.AlignMask, pheap.AlignMask)
                     
         # lots of blocks..
-        if imm.getOsVersion() == "xp":
+        if OS < 6.0:
             window.Log("+0x050 VirtualAllocedBlocks            ")
             for block in pheap.VirtualAllocedBlock:
                 v += 1
@@ -2391,7 +2745,7 @@ def analyse_heap(heap, imm, window):
             NonDedicatedListLength = imm.readMemory(heap+0x16c, 4)
             NonDedicatedListLength = struct.unpack("L", NonDedicatedListLength)[0]
             window.Log("+0x16c NonDedicatedListLength         : 0x%08x" % NonDedicatedListLength, NonDedicatedListLength)
-            if imm.getOsVersion() == "xp":
+            if OS < 6.0:
                 window.Log("+0x170 LargeBlocksIndex               : 0x%08x" % pheap.LargeBlocksIndex, pheap.LargeBlocksIndex)
             window.Log("+0x174 PseudoTagEntries               : 0x%08x" % pheap.PseudoTagEntries)
             window.Log("+0x178 Freelist[0]                    : 0x%08x" % (heap+0x178), (heap+0x178))
@@ -2415,7 +2769,7 @@ def analyse_heap(heap, imm, window):
             window.Log("+0x586 FrontEndHeapType               : 0x%08x" % FrontEndHeapType, FrontEndHeapType)
             window.Log("+0x587 LastSegmentIndex               : 0x%08x" % LastSegmentIndex, LastSegmentIndex)         
         
-        elif imm.getOsVersion() == "7":
+        elif OS >= 6.0:
             Encoding = imm.readMemory(heap+0x50, 4)
             Encoding = struct.unpack("L", Encoding)[0]            
             window.Log("+0x050 Encoding                       : 0x%08x" % Encoding, Encoding)
@@ -2498,6 +2852,11 @@ def analyse_heap(heap, imm, window):
 def main(args):
     imm = immlib.Debugger()
     
+    # set the global OS version
+    global OS
+    OS = imm.getOsRelease()
+    
+    # custom window
     if not opennewwindow:            
         window = imm.getKnowledge(tag)
         if window and not window.isValidHandle():
@@ -2508,13 +2867,12 @@ def main(args):
         if not window:
             window = imm.createTable("Heaper - by mr_me", ["Address", "Information"])
             imm.addKnowledge(tag, window, force_add = 1)
-        #win_banner(window)
-        
+
     if not args:
-        win_banner(window)
+        banner(window)
         return usage(window, imm)
-    win_banner(window)
-         
+    banner(window)
+    
     if len(args) > 1:
         cmds = set_up_usage()
         
@@ -2572,28 +2930,12 @@ def main(args):
                 else:
                     window.Log("(+) This version is the latest version...")
                     return "(!) This version is the latest version..."
-  
-            # Dump function pointers from the parent processes .data segment
-            # ==============================================================
-            # TODO: dump function pointers from dlls as well
-            
-            elif args[0].lower().strip() == "dumpfunctionpointers" or args[0].lower().strip() == "dfp":
-                writable_segment = 0x00000000
-                writable_segment_size = 0x0
-                for addr in imm.getMemoryPageByOwner(imm.getDebuggedName()):
-                    if addr.section == ".data":
-                        writable_segment = addr.baseaddress
-                        writable_segment_size = addr.size
-                
-                if not writable_segment and not writable_segment_size:
-                    return ".data segment not found"
-                
-                window.Log("-" * 60)
-                window.Log("Dumping function pointers from the %s process" % imm.getDebuggedName())
-                window.Log("-" * 60)
-                dump_function_pointers(window, imm, writable_segment)
                 
             else:
+                window.Log("")
+                window.Log("(-) Invalid number of arguments!")
+                window.Log("(!) Try '!heaper help %s'" % args[0].lower().strip())
+                window.Log("-" * 32)
                 return "(-) Invalid number of arguments"
         else:
             usage(imm)
@@ -2628,10 +2970,10 @@ def main(args):
                     window.Log("    when using the graphing functionaility.")
                     return "(-) Please ensure pydot, pyparser and graphviz are installed!"
                 graphic_structure = True
-                if "-f" in args:
+                if "-o" in args:
                     try:
                         custfilename = True
-                        filename = args[args.index("-f")+1]
+                        filename = args[args.index("-o")+1]
                     except:
                         return "no filename specified"   
 
@@ -2666,7 +3008,7 @@ def main(args):
                     window.Log("(-) Invalid heap address or cannot read address!")
                     return "(-) Invalid heap address or cannot read address!"
         
-                if imm.getOsVersion() == "xp":
+                if OS < 6.0:
                     FrontEndHeap = imm.readMemory(heap+0x580, 4)
                     (FrontEndHeap) = struct.unpack("L", FrontEndHeap)                    
                     window.Log("-" * 77)
@@ -2677,13 +3019,17 @@ def main(args):
                     else:
                         dump_lal(imm, pheap, graphic_structure, window)
                         
-                elif imm.getOsVersion() == "7":
+                elif OS >= 6.0:
                     if pheap.FrontEndHeapType == 0x2:
                         switch = {}
                         switch["bucket_flag"] = False
                         switch["UserBlockCache_flag"] = False
                         switch["UserBlocks_flag"] = False
+                        switch["Bin_size"] = False
                         
+                        if "-s" in args:
+                            switch["Bin_size"] = args[args.index("-s")+1]
+                            
                         if "-b" in args:
                             switch["bucket_flag"] = True
                         if "-c" in args:
@@ -2699,7 +3045,7 @@ def main(args):
                         
                         window.Log("")
                         window.Log("-" * 28)
-                        window.Log("LFH information @ 0x%08x" % pheap.LFH.address)
+                        window.Log("LFH information @ 0x%08x" % (pheap.LFH.address),pheap.LFH.address)
                         window.Log("-" * 28)
                         if custfilename:
                             dump_lfh(imm, pheap, graphic_structure, window, switch, filename)
@@ -2708,19 +3054,19 @@ def main(args):
                     elif pheap.FrontEndHeapType == 0x1:
                         window.Log("(?) You are running windows 7 yet the Lookaside list is being used?")
                         return "(?) You are running windows 7 yet the Lookaside list is being used?"
-                    #window.Log("Lookaside list analyse not supported under Windows Vista and above")
             
             # analyse the backend
             # ===================
-            
             elif args[0].lower().strip() == "analysebackend" or args[0].lower().strip() == "ab":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
                 except:
-                    window.Log("Invalid heap address!")
-                    return "Invalid heap address!"
+                    window.Log("")
+                    window.Log("(-) Invalid heap address! Try '!heaper help ab'")
+                    window.Log("-" * 47)
+                    return "Invalid heap address! Try '!heaper help ab'"
                 
-                if imm.getOsVersion() == "xp":
+                if OS < 6.0:
                     
                     if pheap.HeapCache:
                         window.Log("-" * 62)
@@ -2741,7 +3087,8 @@ def main(args):
                         
                     dump_FreeListInUse(pheap, window)
                     
-                    # HeapCache
+                    # HeapCache analysis
+                    # ==================
                     if pheap.HeapCache:
                         window.Log("")
                         window.Log("HeapCache")
@@ -2755,12 +3102,13 @@ def main(args):
                 else:
                     if graphic_structure:
                         if custfilename:
-                            dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure, filename)
+                            dump_ListHint_and_FreeList(args, pheap, window, heap, imm, graphic_structure, filename)
                         else:
-                            dump_ListHint_and_freelist(pheap, window, heap, imm, graphic_structure)
+                            dump_ListHint_and_FreeList(args, pheap, window, heap, imm, graphic_structure)
                     else:
-                        dump_ListHint_and_freelist(pheap, window, heap, imm)
-                    
+                        dump_ListHint_and_FreeList(args, pheap, window, heap, imm)
+                
+                window.Log("-" * 76)
 
             # analyse heap cache if it exists
             # ===============================
@@ -2770,7 +3118,7 @@ def main(args):
                 except:
                     window.Log("Invalid heap address!")
                     return "Invalid heap address!"
-                if imm.getOsVersion() == "xp":
+                if OS < 6.0:
                     if pheap.HeapCache:
                         dump_HeapCache_struc(pheap, window)
                         window.Log("")
@@ -2788,28 +3136,38 @@ def main(args):
                         window.Log("    1. Freeing 32 blocks into FreeList[0] simultaneously")
                         window.Log("    2. De-commiting 256 blocks")
                         return "(-) The HeapCache is inactive for this heap!"
-                elif imm.getOsVersion() == "7":
+                elif OS >= 6.0:
                     return "(-) HeapCache not supported under windows 7"
                                                
             # perform hueristics
             # ==================
-            # TODO: hueristics additions for LFH
+            # TODO: check win7 for hueristics
             elif args[0].lower().strip() == "exploit" or args[0].lower().strip() == "exp":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
                 except:
                     window.Log("Invalid heap address!")
                     return "Invalid heap address!"
-                if "-f" in args:
-                    set_Lookaside_chunks(imm, pheap, heap)
-                    perform_heuristics(window, imm, pheap, "FrontEnd")
-                elif "-b" in args:
-                    set_FreeList_chunks(imm, pheap, heap)
-                    perform_heuristics(window, imm, pheap, "BackEnd")
-                else:
-                    window.Log("")
-                    window.Log("(-) Please provide the correct arguments. Run !heaper help <command> for help")           
-                    return "(-) Please provide the correct arguments. Run !heaper help <command> for help"
+                if OS < 6.0:
+                    if "-f" in args:
+                        set_Lookaside_chunks(imm, pheap, heap)
+                        perform_heuristics(window, imm, pheap, "FrontEnd")
+                    elif "-b" in args:
+                        set_FreeList_chunks(imm, pheap, heap)
+                        perform_heuristics(window, imm, pheap, "BackEnd")
+                    else:
+                        window.Log("")
+                        window.Log("(-) Please provide the correct arguments. Run !heaper help <command> for help")           
+                        return "(-) Please provide the correct arguments. Run !heaper help <command> for help"
+                elif OS >= 6.0:
+                    if "-f" in args:
+                        perform_LFH_heuristics(imm, pheap, heap,window)
+                    elif "-b" in args:
+                        window.Log("")
+                        window.Log("(!) No known exploitable techniques in the NT 6.x ListHint/FreeList :(")
+                        window.Log("")
+                        return "(!) No known exploitable techniques in the NT 6.x ListHint/FreeList :("
+                                             
             
             # analyse FreelistInUse
             # =====================
@@ -2839,7 +3197,6 @@ def main(args):
                 
             # analyse segment chunks
             # ======================
-            # TODO: find out if this still works on win7?
             elif args[0].lower().strip() == "analysechunks" or args[0].lower().strip() == "ac":
                 try:
                     pheap, heap = get_heap_instance(args[1].lower().strip(), imm)
@@ -2894,65 +3251,48 @@ def main(args):
                     else:
                         window.Log("-" * 62)
                         dumpchunk_info(chunk, show_detail, window)
-                        
+
             # dump function pointers
             # ======================
             elif args[0].lower().strip() == "dumpfunctionpointer" or args[0].lower().strip() == "dfp":
-                writable_segment = 0x00000000
-                writable_segment_size = 0x0
-                restore = False
+                # some checks
                 patch = False
-                address_to_patch = False
-                for addr in imm.getMemoryPageByOwner(imm.getDebuggedName()):
-                    if addr.section == ".data":
-                        writable_segment = addr.baseaddress
-                        writable_segment_size = addr.size
-                
-                if not writable_segment and not writable_segment_size:
-                    return ".data segment not found"
-
-                if "-p" in args:
+                restore = False
+                if "-p" in args and "-r" not in args:
                     patch = True
-                elif "-r" in args:
-                    restore = True
+                    try:
+                        patch_val = args[args.index("-p")+1].lower().strip()
+                    except:
+                        return "(-) You must provide a argument to -p <address/all>"
 
-                if patch:
-                    if len(args) == 3:
-                        if args[2].lower() != "all":
-                            try:
-                                address_to_patch = int(args[2].lower(),16)
-                            except:
-                                return "(-) Please specficy which pointer to patch... eg: all / 00514450"
-                        else:
-                            address_to_patch = args[2].lower()
-                    else:
-                        return "(-) Please specify which pointer to patch... eg: all / 0x00514450"
-                  
-                    window.Log("-" * 60)
-                    if args[2].lower() != "all":
-                        window.Log("Patching 0x%08x function pointer(s) " % address_to_patch)
-                    else:
-                        window.Log("Patching %s function pointer(s) " % address_to_patch)
-                    window.Log("-" * 60)
-                elif restore:
-                    if len(args) == 3:
-                        if args[2].lower() != "all":
-                            try:
-                                address_to_patch = int(args[2].lower(),16)
-                            except:
-                                return "(-) Please specify which pointer to restore... eg: all / 00514450"
-                        else:
-                            address_to_patch = args[2].lower()
-                    else:
-                        return "(-) Please specify which pointer to restore... eg: all / 00514450"
+                    return analyse_function_pointers(args, window, imm, True, patch_val, False, False)
                     
-                    window.Log("-" * 60)
-                    if args[2].lower() != "all":
-                        window.Log("Restoring function pointer 0x%08x" % address_to_patch)
-                    else:
-                        window.Log("Restoring %s function pointer(s) " % address_to_patch)
-                    window.Log("-" * 60)  
-                return dump_function_pointers(window, imm, writable_segment, patch, restore, address_to_patch)
+                elif "-r" in args and "-p" not in args:
+                    restore = True
+                    try:
+                        restore_val = args[args.index("-r")+1].lower().strip()
+                    except:
+                        return "(-) You must provide a argument to -r <address/all>"
+                    
+                    return analyse_function_pointers(args, window, imm, False, False, True, restore_val)
+                    
+                elif "-r" in args and "-p" in args:
+                    window.Log("")
+                    window.Log("(-) You cannot patch and restore at the same time!")
+                    window.Log("(!) Try '!heaper help %s'" %  args[0].lower().strip())
+                    window.Log("-" * 30)
+                    return "(-) You cannot patch and restore at the same time!"
+            
+                # if at any time we dont have the size or address (besides patching and restoring).. fail.
+                if ("-s" not in args or "-a" not in args) and not patch and not restore:
+                    window.Log("")
+                    window.Log("(-) Need the address and size to dump function pointers")
+                    window.Log("(!) Try '!heaper help %s'" %  args[0].lower().strip())
+                    window.Log("-" * 30)
+                    return "(-) Need the address and size to dump function pointers"
+                # else just view the function pointers
+                elif not patch and not restore:
+                    return analyse_function_pointers(args, window, imm, False, False, False, False)
             
             # analyse segments
             # ================
@@ -2966,19 +3306,19 @@ def main(args):
                 window.Log("")
                 valid_functions = ["alloc", "free", "create","destroy","realloc","size","createcs","deletecs","all","setuef"]
                 # set the flags
-                FilterHeap = False
-                Disable = False
-                AllocFlag = False
-                FreeFlag = False
-                CreateFlag = False
-                DestroyFlag = False
-                ReAllocFlag = False
-                sizeFlag = False
-                CreateCSFlag = False
-                DeleteCSFlag = False
-                setuefFlag = False
-                setVAllocFlag = False
-                setVFreeFlag = False
+                FilterHeap      = False
+                Disable         = False
+                AllocFlag       = False
+                FreeFlag        = False
+                CreateFlag      = False
+                DestroyFlag     = False
+                ReAllocFlag     = False
+                sizeFlag        = False
+                CreateCSFlag    = False
+                DeleteCSFlag    = False
+                setuefFlag      = False
+                setVAllocFlag   = False
+                setVFreeFlag    = False
                 if len(args) > 2:
                     # !heaper command <heap> -h <func>
                     if (args[2].lower().strip() == "-h" or args[2].lower().strip() == "-u"):
@@ -2993,21 +3333,19 @@ def main(args):
                                 AllocFlag = True
                             elif args[3].lower().strip() == "free":
                                 FreeFlag = True
-                            # zmfg you didnt just hook all did you!?
-                            # thats every call for a specfic heap...
                             elif args[3].lower().strip() == "all":
                                 # hook everything!
-                                AllocFlag = True
-                                FreeFlag = True
-                                CreateFlag = True
-                                DestroyFlag = True
-                                ReAllocFlag = True
-                                sizeFlag = True
-                                CreateCSFlag = True
-                                DeleteCSFlag = True
-                                setuefFlag = True 
-                                setVAllocFlag = True
-                                setVFreeFlag = True  
+                                AllocFlag       = True
+                                FreeFlag        = True
+                                CreateFlag      = True
+                                DestroyFlag     = True
+                                ReAllocFlag     = True
+                                sizeFlag        = True
+                                CreateCSFlag    = True
+                                DeleteCSFlag    = True
+                                setuefFlag      = True 
+                                setVAllocFlag   = True
+                                setVFreeFlag    = True  
                                                                                        
                     # !heaper command -h <func>                    
                     elif (args[1].lower().strip() == "-h" or args[1].lower().strip() == "-u"):
@@ -3021,42 +3359,40 @@ def main(args):
                             return "(-) Please include a valid function to hook that doesnt require a heap"   
                                                                       
                         elif args[2].lower().strip() == "create":
-                            CreateFlag = True
+                            CreateFlag      = True
                         elif args[2].lower().strip() == "destroy":
-                            DestroyFlag = True
+                            DestroyFlag     = True
                         elif args[2].lower().strip() == "alloc":
-                            AllocFlag = True
+                            AllocFlag       = True
                         elif args[2].lower().strip() == "free":
-                            FreeFlag = True
+                            FreeFlag        = True
                         elif args[2].lower().strip() == "realloc":
-                            ReAllocFlag = True                            
+                            ReAllocFlag     = True                            
                         elif args[2].lower().strip() == "setuef":
-                            setuefFlag = True
+                            setuefFlag      = True
                         elif args[2].lower().strip() == "va":
-                            setVAllocFlag = True
+                            setVAllocFlag   = True
                         elif args[2].lower().strip() == "vf":
-                            setVFreeFlag = True
+                            setVFreeFlag    = True
                         elif args[2].lower().strip() == "size":
-                            sizeFlag = True
+                            sizeFlag        = True
                         elif args[2].lower().strip() == "createcs":
-                            CreateCSFlag = True
+                            CreateCSFlag    = True
                         elif args[2].lower().strip() == "deletecs":
-                            DeleteCSFlag = True
+                            DeleteCSFlag    = True
                           
-                        # zmfg you didnt just hook all did you!?
-                        # thats all calls for all heaps
                         elif args[2].lower().strip() == "all":
-                                    AllocFlag = True
-                                    FreeFlag = True
-                                    CreateFlag = True
-                                    DestroyFlag = True
-                                    ReAllocFlag = True
-                                    sizeFlag = True
-                                    CreateCSFlag = True
-                                    DeleteCSFlag = True
-                                    setuefFlag = True 
-                                    setVAllocFlag = True
-                                    setVFreeFlag = True
+                                    AllocFlag       = True
+                                    FreeFlag        = True
+                                    CreateFlag      = True
+                                    DestroyFlag     = True
+                                    ReAllocFlag     = True
+                                    sizeFlag        = True
+                                    CreateCSFlag    = True
+                                    DeleteCSFlag    = True
+                                    setuefFlag      = True 
+                                    setVAllocFlag   = True
+                                    setVFreeFlag    = True
                         else:
                             window.Log("(-) Please include a valid heap for this hook!")
                             return "(-) Please include a valid heap for this hook!"
@@ -3069,9 +3405,9 @@ def main(args):
                 window.Log("-" * 30)
                 if AllocFlag:
                     allocaddr = imm.getAddress("ntdll.RtlAllocateHeap" )
-                    if imm.getOsVersion() == "xp":
+                    if OS < 6.0:
                         retaddr = allocaddr+0x117
-                    elif imm.getOsVersion() == "7":
+                    elif OS >= 6.0:
                         retaddr = allocaddr+0xe6
                     if FilterHeap:
                         hook_output = ("(+) %s RtlAllocateHeap() for heap 0x%08x" % 
@@ -3081,9 +3417,9 @@ def main(args):
                         (hook_on(imm, ALLOCLABEL, allocaddr, "RtlAllocateHeap", retaddr, Disable, window)))                      
                 if FreeFlag:
                     freeaddr = imm.getAddress("ntdll.RtlFreeHeap" )
-                    if imm.getOsVersion() == "xp":
+                    if OS < 6.0:
                         retaddr = freeaddr+0x130
-                    elif imm.getOsVersion() == "7":
+                    elif OS >= 6.0:
                         retaddr = freeaddr+0x99
                     if FilterHeap:
                         hook_output = ("(+) %s RtlFreeHeap() for heap 0x%08x" % 
@@ -3099,13 +3435,13 @@ def main(args):
                     createaddr = imm.getAddress("kernel32.HeapCreate" )
                     ret_address = imm.getAddress("ntdll.RtlCreateHeap" )
                     
-                    if imm.getOsVersion() == "xp":
+                    if OS < 6.0:
                         retaddr = ret_address+0x42e
                         hook_output = ("(+) %s HeapCreate()" % 
                         (hook_on(imm, CREATELABEL, createaddr, "RtlCreateHeap", retaddr, Disable, window)))
                     # if using winodws 7, lets get the ntdll!RtlpHeapGenerateRandomValue64 calculated value
                     # and set the ret offset correctly
-                    elif imm.getOsVersion() == "7":
+                    elif OS >= 6.0:
                         retaddr = ret_address+0x536
                         
                         # 77be2a69 e819feffff      call    ntdll!RtlpHeapGenerateRandomValue64 (77be2887)
@@ -3117,41 +3453,41 @@ def main(args):
                 
                 if DestroyFlag:
                     destoryaddr = imm.getAddress("ntdll.RtlDestroyHeap")
-                    if imm.getOsVersion() == "xp":
+                    if OS < 6.0:
                         retaddr = destoryaddr+0xd9
-                    elif imm.getOsVersion() == "7":
+                    elif OS >= 6.0:
                         retaddr = destoryaddr+0xdc
                     hook_output = ("(+) %s RtlDestroyHeap() for heap 0x%08x" % 
                     (hook_on(imm, DESTROYLABEL, destoryaddr, "RtlDestroyHeap", retaddr, Disable, window), 0))
                 if ReAllocFlag:
                     reallocaddr = imm.getAddress("ntdll.RtlReAllocateHeap")
-                    if imm.getOsVersion() == "xp":
+                    if OS < 6.0:
                         retaddr = reallocaddr+0x20a
-                    elif imm.getOsVersion() == "7":
+                    elif OS >= 6.0:
                         retaddr = reallocaddr+0x98
                     hook_output = ("(+) %s RtlReAllocateHeap() for heap 0x%08x" % 
                     (hook_on(imm, REALLOCLABEL, reallocaddr, "RtlReAllocateHeap", retaddr, Disable, window), 0))
                 if sizeFlag:
                     sizeaddr = imm.getAddress("ntdll.RtlSizeHeap")
-                    if imm.getOsVersion() == "xp":
+                    if OS < 6.0:
                         retaddr = sizeaddr+0x62
-                    elif imm.getOsVersion() == "7":
+                    elif OS >= 6.0:
                         retaddr = sizeaddr+0xae
                     hook_output = ("(+) %s RtlSizeHeap() for heap 0x%08x" % 
                     (hook_on(imm, SIZELABEL, sizeaddr, "RtlSizeHeap", retaddr, Disable, window), 0))
                 if CreateCSFlag:
                     create_cs_addr = imm.getAddress("ntdll.RtlInitializeCriticalSection")
-                    if imm.getOsVersion() == "xp":
+                    if OS < 6.0:
                         retaddr = create_cs_addr+0x10
-                    elif imm.getOsVersion() == "7":
+                    elif OS >= 6.0:
                         retaddr = create_cs_addr+0x13
                     hook_output = ("(+) %s RtlInitializeCriticalSection() for heap 0x%08x" % 
                     (hook_on(imm, CREATECSLABEL, create_cs_addr, "RtlInitializeCriticalSection", retaddr, Disable, window), 0))
                 if DeleteCSFlag:
                     delete_cs_addr = imm.getAddress("ntdll.RtlDeleteCriticalSection")
-                    if imm.getOsVersion() == "xp":
+                    if OS < 6.0:
                         retaddr = delete_cs_addr+0x78
-                    elif imm.getOsVersion() == "7":
+                    elif OS >= 6.0:
                         retaddr = delete_cs_addr+0xef
                     hook_output = ("(+) %s RtlDeleteCriticalSection() for heap 0x%08x" % 
                     (hook_on(imm, DELETECSLABEL, delete_cs_addr, "RtlDeleteCriticalSection", retaddr, Disable, window), 0))                    
@@ -3159,29 +3495,29 @@ def main(args):
                     setuef_addr = imm.getAddress("kernel32.SetUnhandledExceptionFilter")
                     # no worries if you dont return here, it just wont log the return address
                     # no use under windows 7 atm
-                    if imm.getOsVersion() == "xp":
+                    if OS < 6.0:
                         retaddr = setuef_addr-0x34707
                         hook_output = ("(+) %s SetUnhandledExceptionFilter() for heap 0x%08x" % 
                         (hook_on(imm, SETUEFLABEL, setuef_addr, "SetUnhandledExceptionFilter", retaddr, Disable, window), 0))                      
-                    elif imm.getOsVersion() == "7":
+                    elif OS >= 6.0:
                         window.Log("(-) Hooking SetUnhandledExceptionFilter is unsupported under windows 7")
                         return "(-) Hooking SetUnhandledExceptionFilter is unsupported under windows 7"
                 
                 if setVAllocFlag:
                     setva_addr = imm.getAddress("kernel32.VirtualAllocEx")
                     # no worries if you dont return here, it just wont log the return address
-                    if imm.getOsVersion() == "xp":
+                    if OS < 6.0:
                         retaddr = setva_addr+0x47
-                    elif imm.getOsVersion() == "7":
+                    elif OS >= 6.0:
                         retaddr = setva_addr+0x101
                     hook_output = ("(+) %s VirtualAllocEx() for heap 0x%08x" % 
                     (hook_on(imm, VIRALLOCLABEL, setva_addr, "VirtualAllocEx", retaddr, Disable, window), 0))                      
                 if setVFreeFlag:
                     setvf_addr = imm.getAddress("kernel32.VirtualFreeEx")
                     # no worries if you dont return here, it just wont log the return address
-                    if imm.getOsVersion() == "xp":
+                    if OS < 6.0:
                         retaddr = setvf_addr+0x3d
-                    elif imm.getOsVersion() == "7":
+                    elif OS >= 6.0:
                         retaddr = setvf_addr+0xd9
                     hook_output = ("(+) %s VirtualFreeEx() for heap 0x%08x" % 
                     (hook_on(imm, VIRFREELABEL, setvf_addr, "VirtualFreeEx", retaddr, Disable, window), 0))                      
