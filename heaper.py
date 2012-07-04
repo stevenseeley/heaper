@@ -33,9 +33,9 @@ import os
 
 # for hooking function pointers
 # =============================
-INDEXER    = 0xb4000000
-INDEX_MASK = 0xFF000000
-FNDX_MASK  = 0x00FFFFFF
+INDEXER      = 0xb4000000
+INDEX_MASK   = 0xFF000000
+FNDX_MASK    = 0x00FFFFFF
 
 # window management
 # =================
@@ -63,7 +63,8 @@ class Heaper:
         "dumpteb", "dt", "analysefrontend", "af", "analysebackend", "ab", "analysechunks", "ac", 
         "dumpfunctionpointers", "dfp", "help", "-h", "analysesegments", "as", "-f", "-m", "-p",
         "freelistinuse", "fliu", "analyseheapcache", "ahc", "exploit", "exp", "u",
-        "update", "patch", "p", "config", "cnf", "hardhook", "hh", "softhook", "sh"]
+        "update", "patch", "p", "config", "cnf", "hardhook", "hh", "softhook", "sh", "findwptrs",
+        "findwritablepointers"]
 
     def run(self):
         self.os         = int(self.imm.getOsRelease().split('.')[0])
@@ -84,12 +85,6 @@ class Heaper:
         self.window.Log("----------------------------------------")
         self.window.Log("by mr_me :: steventhomasseeley@gmail.com")
 
-def githash(data):
-    s = sha1()
-    s.update("blob %u\0" % len(data))
-    s.update(data)
-    return s.hexdigest()
-
     def usage(self):
         self.window.Log("")
         self.window.Log("****   available commands   ****")
@@ -98,6 +93,7 @@ def githash(data):
         self.window.Log("dumpteb / dt                          : Dump the TEB pointers")
         self.window.Log("dumpheaps / dh                        : Dump the heaps")
         self.window.Log("dumpfunctionpointers / dfp            : Dump all the processes function pointers")
+        self.window.Log("findwritablepointers / findwptrs      : Dump all the called, writable function pointers")
         self.window.Log("analyseheap <heap> / ah <heap>        : Analyse a particular heap")
         self.window.Log("analysefrontend <heap> / af <heap>    : Analyse a particular heap's frontend data structure")
         self.window.Log("analysebackend <heap> / ab <heap>     : Analyse a particular heap's backend data structure")
@@ -260,13 +256,33 @@ def githash(data):
         extusage["config"] += "~~~~~~~~~\n"
         extusage["config"] += "Display the settings '!heaper cnf -d'\n"
         extusage["config"] += "Set the workingdir option '!heaper cnf -s workingdir c:\output'\n"
-        extusage["exploit"] = "\nexploit / exp : Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions\n"
+        extusage["exploit"] = "\nexploit <heap> / exp <heap>: Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions\n"
         extusage["exploit"] += "-----------------------------------------------------------------------------------\n"
         extusage["exploit"] += "Use -f to analyse the FrontEnd allocator\n"
         extusage["exploit"] += "Use -b to analyse the BackEnd allocator\n"
         extusage["exploit"] += "Example: !heaper exploit 00490000 -f\n"
+        extusage["findwritablepointers"] = "\nfindwritablepointers / findwptrs : Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions\n"
+        extusage["findwritablepointers"] += "-------------------------------------------------------------------------------------------------------------------------------------\n"
+        extusage["findwritablepointers"] += "Use -m to filter by module (use 'all' for all modules in the address space)\n"
+        extusage["findwritablepointers"] += "!! Warning: using the 'all' option will take a long time. Go get a 0xc00ffee !!\n"
+        extusage["findwritablepointers"] += "Examples:\n"
+        extusage["findwritablepointers"] += "~~~~~~~~~\n"
+        extusage["findwritablepointers"] += "find calls/jmps in ntdll.dll - '!heaper findwptrs -m ntdll.dll'\n"
+        extusage["findwritablepointers"] += "find calls/jmps in all modules - '!heaper findwptrs -m all'\n"
         return extusage
 
+    # taken from mona.py, thanks peter
+    def get_modules_iat(self, module):
+        themod = module
+        syms = themod.getSymbols()
+        IAT = []
+        for sym in syms:
+            if syms[sym].getType().startswith("Import"):
+                theaddress = syms[sym].getAddress()
+                if not theaddress in IAT:
+                    IAT.append(theaddress)
+        return IAT
+    
     def set_usage(self):
         self.cmds = {}
         self.cmds["dumppeb"] = Setcommand("dumppeb", "Dump the PEB pointers",self.get_extended_usage()["dumppeb"], "dp")
@@ -300,7 +316,9 @@ def githash(data):
         self.cmds["exploit"] = Setcommand("exploit", "Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions",self.get_extended_usage()["exploit"], "exp")
         self.cmds["exp"] = Setcommand("exploit", "Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions",self.get_extended_usage()["exploit"], "exp")    
         self.cmds["config"] = Setcommand("config", "Display or set the current configuration",self.get_extended_usage()["config"], "cnf")
-        self.cmds["cnf"] = Setcommand("config", "Display or set the current configuration",self.get_extended_usage()["config"], "cnf") 
+        self.cmds["cnf"] = Setcommand("config", "Display or set the current configuration",self.get_extended_usage()["config"], "cnf")
+        self.cmds["findwritablepointers"] = Setcommand("findwritablepointers", "List all the called, hardcoded, writable function pointers for a given module or modules",self.get_extended_usage()["findwritablepointers"], "findwptrs")
+        self.cmds["findwptrs"] = Setcommand("findwritablepointers", "List all the called, hardcoded, writable function pointers for a given module or modules",self.get_extended_usage()["findwritablepointers"], "findwptrs") 
 
     def set_config(self):
         self.imm.addKnowledge("config_workingdir","C:\\Program Files\\Immunity Inc\\Immunity Debugger\\heaper")
@@ -879,12 +897,148 @@ def githash(data):
     def to_hexidecimal(self, n):
         return "%08x" % n
 
-    def githash(self, data):
+    def generate_githash(self, data):
         s = sha1()
         s.update("blob %u\0" % len(data))
         s.update(data)
         return s.hexdigest()
 
+
+    def meetsAccessLevel(self, page, accessLevel):
+        """
+        Checks if a given page meets a given access level
+    
+        Arguments:
+        page - a page object
+        accesslevel - a string containing one of the following access levels :
+        R,W,X,RW,RX,WR,WX,RWX or *
+    
+        Return:
+        a boolean
+        """
+        if "*" in accessLevel:
+            return True
+        
+        pageAccess = page.getAccess(human=True)
+        
+        if "R" in accessLevel:
+            if not "READ" in pageAccess:
+                return False
+        if "W" in accessLevel:
+            if not "WRITE" in pageAccess:
+                return False
+        if "X" in accessLevel:
+            if not "EXECUTE" in pageAccess:
+                return False
+                
+        return True
+    
+    def find_hardcoded_pointers(self, usermodule=False):
+        """
+        This function finds all static function pointers
+        either for a given module or all modules
+        """
+        text_addresses = {}
+        if not usermodule:
+            confirmation = self.imm.comboBox("Time is of essence, so are you sure?",["yes","no"])
+            if confirmation == "yes":
+                for name in self.imm.getAllModules().iterkeys():
+                    module = name.lower()
+                    module_page = self.imm.getMemoryPageByOwner(module)
+                    usermod_obj = self.imm.findModuleByName(module)
+
+                    # tries to filter the IAT, but if it fails, no big deal
+                    iat_table = self.get_modules_iat(usermod_obj)
+                    for u in module_page:
+                        if u.section == ".text":
+                            mod = self.imm.findModule(u.owner)
+                            modname = mod[0]
+                            usermod_obj = self.imm.getModule(modname)
+                            if not text_addresses.has_key(u.baseaddress):
+                                text_addresses[u.baseaddress] = [u.size, modname, usermod_obj.getVersion()]
+                for addr, details in text_addresses.iteritems():
+                    size = details[0]
+                    self.window.Log("")
+                    if details[2] != "":
+                        self.window.Log("-" * (len(details[1])+58))
+                        self.window.Log("(+) Module name: %s version: %s" % (details[1], details[2]))
+                        self.window.Log("-" * (len(details[1])+58))
+                    elif details[2] == "":
+                        self.window.Log("-" * (len(details[1])+17))
+                        self.window.Log("(+) Module name: %s" % (details[1]))
+                        self.window.Log("-" * (len(details[1])+17))
+                    self.window.Log("")
+                    i = 0
+                    while i < size:
+                        try:
+                            op = self.imm.disasmForward( addr )
+                        except:
+                            pass
+                        if op.isCall() or op.isJmp():
+                            if op.dump[0:4] == "FF15" or op.dump[0:4] == "FF25":
+                                if op.getAddrConst() not in iat_table:
+                                    mempage = self.imm.getMemoryPageByAddress(op.adrconst)
+                                    if mempage:
+                                        if self.meetsAccessLevel(mempage, "W"):
+                                            self.window.Log("0x%08x: %s" % (op.ip, op.result), op.ip)
+                        addr = op.getAddress()
+                        i += 1
+            elif confirmation == "no":
+                self.window.Log("")
+                self.window.Log("(!) Maybe try with !heaper findptrs -m <module>")
+                self.window.Log("")
+                return "(!) Maybe try with !heaper findptrs -m <module>"
+            else:
+                self.window.Log("")
+                self.window.Log("(!) Maybe try with !heaper findptrs -m <module>")
+                self.window.Log("")
+                return "(!) Invalid option %s" % confirmation
+
+        # filter by module name        
+        elif usermodule:
+            try:
+                module_page = self.imm.getMemoryPageByOwner(usermodule)
+                usermod_obj = self.imm.findModuleByName(usermodule)
+                iat_table = self.get_modules_iat(usermod_obj)
+            except:
+                self.window.Log("")
+                self.window.Log("(-) Invalid module name!")
+                self.window.Log("")
+                return "(-) Invalid module name!"
+            self.window.Log("")
+            for u in module_page:
+                if u.section == ".text":
+                    mod = self.imm.findModule(u.owner)
+                    modname = mod[0]
+                    usermod_obj = self.imm.getModule(modname)
+                    text_addresses[u.baseaddress] = [u.size, modname, usermod_obj.getVersion()]
+            for addr, details in text_addresses.iteritems():
+                size = details[0]               
+                if details[2] != "":
+                    self.window.Log("-" * (len(details[1])+58))
+                    self.window.Log("(+) Module name: %s version: %s" % (details[1], details[2]))
+                    self.window.Log("-" * (len(details[1])+58))
+                elif details[2] == "":
+                    self.window.Log("-" * (len(details[1])+17))
+                    self.window.Log("(+) Module name: %s" % (details[1]))
+                    self.window.Log("-" * (len(details[1])+17))
+                self.window.Log("")
+                i = 0
+                while i < size:
+                    try:
+                        op = self.imm.disasmForward( addr )
+                    except:
+                        pass
+                    if op.isCall() or op.isJmp():
+                        if op.dump[0:4] == "FF15" or op.dump[0:4] == "FF25":
+                            if op.getAddrConst() not in iat_table:
+                                mempage = self.imm.getMemoryPageByAddress(op.adrconst)
+                                if mempage:
+                                    if self.meetsAccessLevel(mempage, "W"):
+                                        self.window.Log("0x%08x: %s" % (op.ip, op.result), op.ip)
+                    addr = op.getAddress()
+                    i += 1
+    
     def analyse_function_pointers(self, args, patch=False, patch_val=False, restore=False, restore_val=False):
         fn_ptr = []
         exclude = []
@@ -2822,7 +2976,7 @@ class Freelist(Back_end):
                             elif not chunk_data[8]:
                                 chunk_nodes.append(pydot.Node(chunk_label, style="filled", shape="rectangle", label=chunk_label, fillcolor="#3366ff" ))
                     i += 1
-                          
+
             # build the datastructure
             chunk_dict[bin_index] = [freelist_node, chunk_nodes]
 
@@ -2871,7 +3025,7 @@ class Freelist(Back_end):
 def main(args):
     imm = immlib.Debugger()
 
-    # custom window    
+    # custom window
     if not opennewwindow:            
         window = imm.getKnowledge(windowtag)
         if window and not window.isValidHandle():
@@ -2898,7 +3052,7 @@ def main(args):
                 for line in usage_text:
                     heaper.window.Log(line)
                 return "(+) Good luck!"
-            else:
+            elif args[1].lower().strip() not in heaper.available_commands:
                 heaper.usage()
                 return "(-) Invalid command specified!"
 
@@ -2931,7 +3085,7 @@ def main(args):
                 current_build = f.read()
                 current_build2 = current_build.split("\r")
                 f.close()
-                if heaper.githash("".join(latest_build2)) != heaper.githash("".join(current_build2)):
+                if heaper.generate_githash("".join(latest_build2)) != heaper.generate_githash("".join(current_build2)):
                     window.Log("(!) Detected older version...")
                     window.Log("(!) Updating...")
                     write_new_file = open(inspect.getfile(inspect.currentframe()),'w')
@@ -2956,6 +3110,9 @@ def main(args):
     # the main entry into the arguments
     # =================================
     elif len(args) >= 2:
+
+        # dump the process environment block
+        # ==================================
         if args[0].lower().strip() == "dumppeb" or args[0].lower().strip() == "dp":
             if args[1] == "-m":
                 heaper.print_peb_struct(True)
@@ -2967,6 +3124,32 @@ def main(args):
                     return "(+) Patching complete!"
                 else:
                     return "(-) This processes PEB has already been patched!"
+
+        # find writable pointers to target
+        # ================================
+        elif args[0].lower().strip() == "findwritablepointers" or args[0].lower().strip() == "findwptrs":
+            heaper.window.Log("")
+            if "-m" in args and (args.index("-m") < (len(args)-1)):
+
+                # this will take alot of time to execute...
+                if args[args.index("-m")+1].lower() == "all":
+                    heaper.window.Log("(+) Dumping all calls/jmps that use")
+                    heaper.window.Log("    writable and static pointers from all modules")
+                    heaper.find_hardcoded_pointers()
+                else:
+                    heaper.window.Log("(+) Dumping all calls/jmps that use")
+                    heaper.window.Log("    writable and static pointers from %s" % args[args.index("-m")+1].lower())
+                    heaper.find_hardcoded_pointers(args[args.index("-m")+1].lower())
+                heaper.window.Log("=" * 40)
+            elif "-m" not in args:
+                usage_text = heaper.cmds["findwptrs"].usage.split("\n")
+                for line in usage_text:
+                    heaper.window.Log(line)
+                return "(!) Please include the -m <module> flag"
+            return "(+) Dumped all pointers!"
+
+        # view and set the configuration
+        # ==============================
         elif args[0].lower().strip() == "config" or args[0].lower().strip() == "cnf":
             heaper.window.Log("")
             heaper.config_settings.append("")
@@ -3004,6 +3187,9 @@ def main(args):
                         heaper.window.Log("%d. %s = \"%s\"" % (i, setting[7:], heaper.imm.getKnowledge(setting)))
                     heaper.window.Log("")
                 return "(+) Finsihed setting the config"
+
+        # exploit heuristics for a given heap
+        # ===================================
         elif args[0].lower().strip() == "exploit" or args[0].lower().strip() == "exp":
             all_heaps = args[1].lower().strip().lower()
             if all_heaps == "all":
