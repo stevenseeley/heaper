@@ -904,7 +904,7 @@ class Heaper:
         return s.hexdigest()
 
 
-    def meetsAccessLevel(self, page, accessLevel):
+    def meets_access_level(self, page, accessLevel):
         """
         Checks if a given page meets a given access level
     
@@ -979,7 +979,7 @@ class Heaper:
                                 if op.getAddrConst() not in iat_table:
                                     mempage = self.imm.getMemoryPageByAddress(op.adrconst)
                                     if mempage:
-                                        if self.meetsAccessLevel(mempage, "W"):
+                                        if self.meets_access_level(mempage, "W"):
                                             self.window.Log("0x%08x: %s" % (op.ip, op.result), op.ip)
                         addr = op.getAddress()
                         i += 1
@@ -1034,7 +1034,7 @@ class Heaper:
                             if op.getAddrConst() not in iat_table:
                                 mempage = self.imm.getMemoryPageByAddress(op.adrconst)
                                 if mempage:
-                                    if self.meetsAccessLevel(mempage, "W"):
+                                    if self.meets_access_level(mempage, "W"):
                                         self.window.Log("0x%08x: %s" % (op.ip, op.result), op.ip)
                     addr = op.getAddress()
                     i += 1
