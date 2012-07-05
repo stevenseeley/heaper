@@ -57,6 +57,7 @@ class Heaper:
         self.pheap              = ""
         self.config_settings    = []
         self.block              = 0x8
+        self.ptr_dict           = {}
 
         # all available commands '!heaper <command>'
         self.available_commands = ["dumppeb", "dp", "dumpheaps", "dh", "analyseheap", "ah", 
@@ -264,10 +265,16 @@ class Heaper:
         extusage["findwritablepointers"] = "\nfindwritablepointers / findwptrs : Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions\n"
         extusage["findwritablepointers"] += "-------------------------------------------------------------------------------------------------------------------------------------\n"
         extusage["findwritablepointers"] += "Use -m to filter by module (use 'all' for all modules in the address space)\n"
+        extusage["findwritablepointers"] += "Use -p to patch all the found function pointers\n"
+        extusage["findwritablepointers"] += "Use -r to restore all the found function pointers\n"
+        extusage["findwritablepointers"] += "\n"
         extusage["findwritablepointers"] += "!! Warning: using the 'all' option will take a long time. Go get a 0xc00ffee !!\n"
+        extusage["findwritablepointers"] += "\n"
         extusage["findwritablepointers"] += "Examples:\n"
         extusage["findwritablepointers"] += "~~~~~~~~~\n"
-        extusage["findwritablepointers"] += "find calls/jmps in ntdll.dll - '!heaper findwptrs -m ntdll.dll'\n"
+        extusage["findwritablepointers"] += "find calls/jmps from ntdll.dll and save there pointers - '!heaper findwptrs -m ntdll.dll'\n"
+        extusage["findwritablepointers"] += "patch the saved pointers from ntdll.dll - '!heaper findwptrs -m ntdll.dll -p'\n"
+        extusage["findwritablepointers"] += "restore the saved pointers from ntdll.dll - '!heaper findwptrs -m ntdll.dll -r'\n"
         extusage["findwritablepointers"] += "find calls/jmps in all modules - '!heaper findwptrs -m all'\n"
         return extusage
 
@@ -903,7 +910,6 @@ class Heaper:
         s.update(data)
         return s.hexdigest()
 
-
     def meets_access_level(self, page, accessLevel):
         """
         Checks if a given page meets a given access level
@@ -918,9 +924,7 @@ class Heaper:
         """
         if "*" in accessLevel:
             return True
-        
         pageAccess = page.getAccess(human=True)
-        
         if "R" in accessLevel:
             if not "READ" in pageAccess:
                 return False
@@ -930,10 +934,42 @@ class Heaper:
         if "X" in accessLevel:
             if not "EXECUTE" in pageAccess:
                 return False
-                
         return True
-    
-    def find_hardcoded_pointers(self, usermodule=False):
+
+    def patch_or_restore_ptrs(self, addr=False, patch=False, restore=False):
+        """
+        This function saves, patches or restores pointers 
+        """
+
+        # we are storing the pointer and data
+        if addr and not patch and not restore:
+            ptr_data = self.imm.readMemory(addr.adrconst, 4)
+            ptr_data = struct.unpack("L", ptr_data)[0]
+
+            # only if the key is not in the dict do we add it.
+            # lets not change the data at the pointer...
+            if not self.ptr_dict.has_key(addr.adrconst):
+                self.ptr_dict[addr.adrconst] = [addr, ptr_data]
+
+            # save the knowledge
+            self.imm.addKnowledge("writablepointers", self.ptr_dict, force_add = 1)            
+
+        # we are patching
+        elif patch and not restore and not addr:
+            for ptr, addr_data in self.ptr_dict.iteritems():
+                self.window.Log("0x%08x: %s | patching ptr: 0x%08x" % (addr_data[0].ip, addr_data[0].result, addr_data[0].adrconst), addr_data[0].adrconst)
+
+                # we just write 0x41414141 for now, this can be changed later
+                self.imm.writeLong( ptr, 0x41414141 )
+
+        # we are restoring
+        elif restore and not patch and not addr:
+            for ptr, addr_data in self.ptr_dict.iteritems():
+                self.window.Log("0x%08x: %s | restoring ptr: 0x%08x" % (addr_data[0].ip, addr_data[0].result, addr_data[0].adrconst), addr_data[0].adrconst)
+                self.imm.writeLong(ptr, addr_data[1])
+            self.imm.forgetKnowledge("writablepointers")
+
+    def find_hardcoded_pointers(self, usermodule=False, patch=False, restore=False):
         """
         This function finds all static function pointers
         either for a given module or all modules
@@ -994,8 +1030,8 @@ class Heaper:
                 self.window.Log("")
                 return "(!) Invalid option %s" % confirmation
 
-        # filter by module name        
-        elif usermodule:
+        # filter by module name
+        elif usermodule and not patch and not restore:
             try:
                 module_page = self.imm.getMemoryPageByOwner(usermodule)
                 usermod_obj = self.imm.findModuleByName(usermodule)
@@ -1035,9 +1071,18 @@ class Heaper:
                                 mempage = self.imm.getMemoryPageByAddress(op.adrconst)
                                 if mempage:
                                     if self.meets_access_level(mempage, "W"):
-                                        self.window.Log("0x%08x: %s" % (op.ip, op.result), op.ip)
+
+                                        #if not patch and not restore:
+                                        # save and log the pointers
+                                        self.patch_or_restore_ptrs(op)
+                                        self.window.Log("0x%08x: %s" % (op.ip, op.result), op.ip)         
                     addr = op.getAddress()
                     i += 1
+        elif usermodule and (patch or restore):
+            if patch:
+                self.patch_or_restore_ptrs(False, True, False)
+            elif restore:
+                self.patch_or_restore_ptrs(False, False, True)
     
     def analyse_function_pointers(self, args, patch=False, patch_val=False, restore=False, restore_val=False):
         fn_ptr = []
@@ -3133,20 +3178,63 @@ def main(args):
 
                 # this will take alot of time to execute...
                 if args[args.index("-m")+1].lower() == "all":
-                    heaper.window.Log("(+) Dumping all calls/jmps that use")
-                    heaper.window.Log("    writable and static pointers from all modules")
-                    heaper.find_hardcoded_pointers()
-                else:
-                    heaper.window.Log("(+) Dumping all calls/jmps that use")
-                    heaper.window.Log("    writable and static pointers from %s" % args[args.index("-m")+1].lower())
-                    heaper.find_hardcoded_pointers(args[args.index("-m")+1].lower())
+                    if "-p" not in args and "-r" not in args:
+                        heaper.window.Log("(+) Dumping all calls/jmps that use")
+                        heaper.window.Log("    writable and static pointers from all modules")
+                        heaper.find_hardcoded_pointers()
+                    elif "-p" in args or "-r" in args:
+                        heaper.window.Log("(-) You cannot patch/restore all static function pointers in all modules")
+                        heaper.window.Log("(-) This WILL take to long and be to unstable.")
+                        usage_text = heaper.cmds["findwptrs"].usage.split("\n")
+                        for line in usage_text:
+                            heaper.window.Log(line)
+                        return "(-) Do not try to patch/restore all pointers in all modules"
+                elif args[args.index("-m")+1].lower() != "all":
+                    if "-p" not in args and "-r" not in args:
+                        heaper.window.Log("(+) Dumping all calls/jmps that use")
+                        heaper.window.Log("    writable and static pointers from %s" % args[args.index("-m")+1].lower())
+                        heaper.find_hardcoded_pointers(args[args.index("-m")+1].lower(), False, False)
+                    elif "-p" in args and "-r" not in args:
+                        heaper.ptr_dict = heaper.imm.getKnowledge("writablepointers")
+                        if heaper.ptr_dict:
+                            heaper.window.Log("-----------------------------------------")
+                            heaper.window.Log("(+) Patching the following pointers from:")
+                            heaper.window.Log("-----------------------------------------")
+                            heaper.find_hardcoded_pointers(args[args.index("-m")+1].lower(), True, False)
+                        else:
+                            heaper.window.Log("")
+                            heaper.window.Log("(-) You will need to display the pointers first")
+                            heaper.window.Log("")
+                            heaper.window.Log("=" * 40)
+                            return "(-) You will need to display the pointers first"
+                    elif "-r" in args and "-p" not in args:
+                        heaper.ptr_dict = heaper.imm.getKnowledge("writablepointers")
+                        if heaper.ptr_dict:
+                            heaper.window.Log("------------------------------------------")
+                            heaper.window.Log("(+) Restoring the following pointers from:")
+                            heaper.window.Log("------------------------------------------")
+                            heaper.find_hardcoded_pointers(args[args.index("-m")+1].lower(), False, True)
+                        else:
+                            heaper.window.Log("")
+                            heaper.window.Log("(-) You will need to display the pointers first")
+                            heaper.window.Log("")
+                            usage_text = heaper.cmds["findwptrs"].usage.split("\n")
+                            for line in usage_text:
+                                heaper.window.Log(line)
+                            heaper.window.Log("=" * 40)
+                            return "(-) You will need to display the pointers first"
                 heaper.window.Log("=" * 40)
             elif "-m" not in args:
                 usage_text = heaper.cmds["findwptrs"].usage.split("\n")
                 for line in usage_text:
                     heaper.window.Log(line)
                 return "(!) Please include the -m <module> flag"
-            return "(+) Dumped all pointers!"
+            else:
+                usage_text = heaper.cmds["findwptrs"].usage.split("\n")
+                for line in usage_text:
+                    heaper.window.Log(line)
+                return "(!) Please include a <module> or specify 'all'"
+            return "(+) Finished analysis!"
 
         # view and set the configuration
         # ==============================
@@ -3806,7 +3894,7 @@ def main(args):
                 if not mod.isAnalysed():
                     imm.analyseCode( mod.getCodebase() )
 
-                # hard hook here  
+                # hard hook here
                 if AllocFlag:
                     hook.softhook_on_alloc(disable_hook)
                 elif FreeFlag:
