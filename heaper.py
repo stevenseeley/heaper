@@ -90,30 +90,30 @@ class Heaper:
         self.window.Log("")
         self.window.Log("****   available commands   ****")
         self.window.Log("")
-        self.window.Log("dumppeb / dp                          : Dump the PEB pointers")
-        self.window.Log("dumpteb / dt                          : Dump the TEB pointers")
-        self.window.Log("dumpheaps / dh                        : Dump the heaps")
-        self.window.Log("dumpfunctionpointers / dfp            : Dump all the processes function pointers")
-        self.window.Log("findwritablepointers / findwptrs      : Dump all the called, writable function pointers")
-        self.window.Log("analyseheap <heap> / ah <heap>        : Analyse a particular heap")
-        self.window.Log("analysefrontend <heap> / af <heap>    : Analyse a particular heap's frontend data structure")
-        self.window.Log("analysebackend <heap> / ab <heap>     : Analyse a particular heap's backend data structure")
-        self.window.Log("analysesegments <heap> / as <heap>    : Analyse a particular heap's segments")
-        self.window.Log("analysechunks <heap> / ac <heap>      : Analyse a particular heap's chunks")
-        self.window.Log("analyseheapcache <heap> / ahc <heap>  : Analyse a particular heap's cache (FreeList[0])")
-        self.window.Log("freelistinuse <heap> / fliu <heap>    : Analyse/patch the FreeListInUse structure")
-        self.window.Log("hardhook <heap> / hh <heap> -f <func> : Hook various functions that manipulate a heap by injecting assembly")
-        self.window.Log("softhook <heap> / sh <heap> -f <func> : Hook various functions that manipulate a heap by using software breakpoints ")
-        self.window.Log("patch <function/data structure> / p   : Patch a function or datastructure")
-        self.window.Log("update / u                            : Update to the latest version")
-        self.window.Log("config <options> / cnf <options>      : Display or set the current context configurations")
-        self.window.Log("exploit <heap> / exp <heap>           : Perform heuristics against the FrontEnd and BackEnd allocators")
-        self.window.Log("                                        to determine exploitable conditions")
+        self.window.Log("dumppeb / dp                            : Dump the PEB pointers")
+        self.window.Log("dumpteb / dt                            : Dump the TEB pointers")
+        self.window.Log("dumpheaps / dh                          : Dump the heaps")
+        self.window.Log("dumpfunctionpointers / dfp              : Dump all the processes function pointers")
+        self.window.Log("findwritablepointers / findwptrs        : Dump all the called, writable function pointers")
+        self.window.Log("analyzeheap <heap> / ah <heap>          : Analyze a particular heap")
+        self.window.Log("analyzefrontend <heap> / af <heap>      : Analyze a particular heap's frontend data structure")
+        self.window.Log("analyzebackend <heap> / ab <heap>       : Analyze a particular heap's backend data structure")
+        self.window.Log("analyzesegments <heap> / as <heap>      : Analyze a particular heap's segments")
+        self.window.Log("analyzechunks <heap> / ac <heap>        : Analyze a particular heap's chunks")
+        self.window.Log("analyzeheapcache <heap> / ahc <heap>    : Analyze a particular heap's cache (FreeList[0])")
+        self.window.Log("freelistinuse <heap> / fliu <heap>      : Analyze/patch the FreeListInUse structure")
+        self.window.Log("hardhook <heap> / hh <heap> -f <func>   : Hook various functions that manipulate a heap by injecting assembly")
+        self.window.Log("softhook <heap> / sh <heap> -f <func>   : Hook various functions that manipulate a heap by using software breakpoints ")
+        self.window.Log("patch <function/data structure> / p     : Patch a function or datastructure")
+        self.window.Log("update / u                              : Update to the latest version")
+        self.window.Log("config <options> / cnf <options>        : Display or set the current context configurations")
+        self.window.Log("exploit [<heap>/all] / exp [<heap>/all] : Perform heuristics against the FrontEnd and BackEnd allocators")
+        self.window.Log("                                          to determine exploitable conditions")
         self.window.Log("")
         self.window.Log("Want more info about a given command? Run !heaper help <command>")
         self.window.Log("Detected the operating system to be windows %s, keep this in mind." % (self.imm.getOsVersion()))
         self.window.Log("")
-        return "Example: !heaper al 00480000 -l"
+        return "Example: !heaper analyzefrontend 00480000 -l"
 
     def get_config(self):
         config_settings = []
@@ -257,11 +257,14 @@ class Heaper:
         extusage["config"] += "~~~~~~~~~\n"
         extusage["config"] += "Display the settings '!heaper cnf -d'\n"
         extusage["config"] += "Set the workingdir option '!heaper cnf -s workingdir c:\output'\n"
-        extusage["exploit"] = "\nexploit <heap> / exp <heap>: Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions\n"
-        extusage["exploit"] += "-----------------------------------------------------------------------------------\n"
+        extusage["exploit"] = "\nexploit [<heap>/all] / exp [<heap>/all]: Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions\n"
+        extusage["exploit"] += "-------------------------------------------------------------------------------------------------------------------------------------------\n"
         extusage["exploit"] += "Use -f to analyse the FrontEnd allocator\n"
         extusage["exploit"] += "Use -b to analyse the BackEnd allocator\n"
-        extusage["exploit"] += "Example: !heaper exploit 00490000 -f\n"
+        extusage["exploit"] += "Examples:\n"
+        extusage["exploit"] += "~~~~~~~~~\n"
+        extusage["exploit"] += "Validate all heaps for overwritten chunks in the frontend - '!heaper exploit all -f'\n"
+        extusage["exploit"] += "Validate the 0x00490000 heap's backend for overwritten chunks - '!heaper exploit 0x00490000 -b'\n"
         extusage["findwritablepointers"] = "\nfindwritablepointers / findwptrs : Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions\n"
         extusage["findwritablepointers"] += "-------------------------------------------------------------------------------------------------------------------------------------\n"
         extusage["findwritablepointers"] += "Use -m to filter by module (use 'all' for all modules in the address space)\n"
@@ -1388,7 +1391,7 @@ class Hook():
         self.heaper.window.Log("(+) Hook RtlFreeHeap:            0x%08x" % self.rtlfree, self.rtlfree)
         self.heaper.window.Log("(+) Hook RtlFreeHeap return:     0x%08x" % self.rtlfreeret, self.rtlfreeret)            
 
-    def set_chunks(self, a, rtlallocate):
+    def set_lfh_chunks(self, a, rtlallocate):
         if a[0] == rtlallocate:
 
             # lets log all the allocs
@@ -1722,6 +1725,7 @@ class Lfh(Front_end):
     # print methods
     def print_chunks(self, size=False): 
         for chunks in self.lfh_userblocks_chunks.itervalues():
+            self.heaper.window.Log("test1")
             userblocks_info = chunks[0]
             self.heaper.window.Log("")
             self.heaper.window.Log("(+) Dumping UserBlocks from =>")
@@ -1785,7 +1789,7 @@ class Lfh(Front_end):
                 self.heaper.window.Log("Cache: 0x%08x Next: 0x%08x Depth: 0x%x Sequence: 0x%x AvailableBlocks: %d Reserved: 0x%x" % (cache.address, cache.Next, cache.Depth, cache.Sequence, cache.AvailableBlocks, cache.Reserved))
         self.heaper.window.Log("-" * 96)   
 
-    def set_chunks(self, size=False):
+    def set_lfh_chunks(self, size=False):
         """
         sets up the lfh_userblocks_chunks datastructure
         lfh_userblocks_chunks = {X:[[][[]]]}
@@ -1802,13 +1806,11 @@ class Lfh(Front_end):
             - Chunk address
             - Read in size value
             - Read in cookie value
-            
-        1->+ many relationship
-
         """
         index = 0
         if self.heaper.pheap.LFH:
             if self.heaper.pheap.LFH.LocalData:
+                self.heaper.window.Log("LocalData?")
                 for seginfo in self.heaper.pheap.LFH.LocalData.SegmentInfo:
                     subseg_management_list = seginfo.SubSegment
                     for subseg in subseg_management_list:
@@ -2247,65 +2249,88 @@ class Listhintfreelist(Back_end):
 
 class Lookaside(Front_end):
 
-    def __init__(self, imm, heaper):
+    def __init__(self, heaper):
         self.lookaside_chunks   = {}
         self.heaper             = heaper
-        self.imm                = imm
         self.block              = 0x8
         self.chunk_nodes        = []
         self.filename           = "lal_graph"
         self.FrontEndHeapType   = 0x0
 
     def run(self):
-        self.Lookaside = self.imm.readMemory(self.heaper.heap+0x580, 4)
+        self.Lookaside = self.heaper.imm.readMemory(self.heaper.heap+0x580, 4)
         self.Lookaside = struct.unpack("L", self.Lookaside)
 
         # the case when we are using the LFH under windows NT 5.X
-        self.FrontEndHeapType = self.imm.readMemory(self.heaper.heap+0x586, 1)
+        self.FrontEndHeapType = self.heaper.imm.readMemory(self.heaper.heap+0x586, 1)
         self.FrontEndHeapType = struct.unpack("b", self.FrontEndHeapType)[0]
 
     def perform_heuristics(self):
         """
         perform heuristics for a given Lookaside
         """
+        def print_exploitation_details(entry):
+            self.heaper.window.Log("")
+            self.heaper.window.Log("Chunk on the Lookaside overwrite:")
+            self.heaper.window.Log("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+            self.heaper.window.Log("It appears that the flink is corrupted. You maybe able to set the flink to a arbitrary function pointer and return")
+            self.heaper.window.Log("the fake chunk back to the application. If so, try to fill the fake chunk with controlled data, overwritting the function pointer.")
+            self.heaper.window.Log("Steps to exploitation:")
+            self.heaper.window.Log("(1) Find called, writable, static function pointers using '!heaper findwptrs <module>'")
+            self.heaper.window.Log("     (1.1) Track which ones are called after the heap corruption by using '!heaper findwptrs <module> -p' to patch the pointers")
+            self.heaper.window.Log("(2) Set the flink to a called function pointer found from step 1.1")
+            self.heaper.window.Log("(3) Allocate 2 chunks of size 0x%03x" % entry)
+            self.heaper.window.Log("(4) Fill the newly allocated, fake chunk with malcious code (or a pointer to shellcode)")
+
         vuln_chunks = 0
-        for entry in range(0, len(self.heaper.pheap.Lookaside)):
-            if self.lookaside_chunks.has_key(entry):
-                entry_chunks = self.lookaside_chunks[entry]
-                for a in entry_chunks[1]:
-                    masked_size  = (a[4] & 0x0000ffff)
-                    masked_flink = (a[3] & 0x0000ffff)
-                    if a[2] and a[4] != entry and masked_size != masked_flink:
-                        vuln_chunks += 1
-                        self.heaper.window.Log("")
-                        self.heaper.window.Log("Lookaside[0x%02x] - No. of chunks: %d, ListEntry: 0x%08x, Size: 0x%02x (%d+8=%d)" % (entry, entry_chunks[0][0], entry_chunks[0][1], (entry*self.block+self.block), (entry*self.block), (entry*self.block+self.block)) )
-                        self.heaper.window.Log("")
-                        self.heaper.window.Log("    Chunk:")
-                        self.heaper.window.Log("    ~~~~~~~")
-                        if (a[1]+self.block) == a[3]: 
-                            self.heaper.window.Log("    "+"*" * 92)
-                            self.heaper.window.Log("    chunk (%d): 0x%08x, flink: 0x00000000, size: %d (0x%02x), cookie: 0x%x <= fake chunk created!" % (a[0],a[1],a[4],a[4],a[5]), address = a[1])
-                            self.heaper.window.Log("    "+"*" * 92)                            
-                        elif (a[1]+self.block) != a[3]:
-                            self.heaper.window.Log("    "+"*" * 100)
-                            self.heaper.window.Log("    chunk (%d): 0x%08x, flink: 0x%08x, size: %d (0x%02x), cookie: 0x%x <= size/chunk corruption detected!" % (a[0],a[1],a[3],a[4],a[4],a[5]), address = a[1])
-                            self.heaper.window.Log("    "+"*" * 100)
-         
-                    # detect corruption, size overwrite only
-                    elif a[2] and a[4] != entry and masked_size == masked_flink:
-                        vuln_chunks += 1
-                        self.heaper.window.Log("")
-                        self.heaper.window.Log("Lookaside[0x%02x] - No. of chunks: %d, ListEntry: 0x%08x, Size: 0x%02x (%d+8=%d)" % (entry, entry_chunks[0][0], entry_chunks[0][1], (entry*self.block+self.block), (entry*self.block), (entry*self.block+self.block)) )
-                        self.heaper.window.Log("")
-                        self.heaper.window.Log("    Chunk:")
-                        self.heaper.window.Log("    ~~~~~~~")
-                        self.heaper.window.Log("    "+"*" * 106)
-                        self.heaper.window.Log("    chunk (%d): 0x%08x, flink: 0x%08x, size: %d (0x%02x), cookie: 0x%x <= flink corruption detected!" % (a[0],a[1],a[3],a[4],a[4],a[5]), address = a[1])
-                        self.heaper.window.Log("    "+"*" * 106)
-        self.heaper.window.Log("")
-        self.heaper.window.Log("(!) Found %d vulnerable chunk(s) in heap 0x%08x" % (vuln_chunks, self.heaper.heap))
-        self.heaper.window.Log("")
-                    
+        if self.heaper.pheap.Lookaside:
+            for entry in range(0, len(self.heaper.pheap.Lookaside)):
+                if self.lookaside_chunks.has_key(entry):
+                    entry_chunks = self.lookaside_chunks[entry]
+                    for a in entry_chunks[1]:
+                        masked_size  = (a[4] & 0x0000ffff)
+                        masked_flink = (a[3] & 0x0000ffff)
+                        if a[2] and a[4] != entry and masked_size != masked_flink:
+                            vuln_chunks += 1
+                            self.heaper.window.Log("")
+                            self.heaper.window.Log("Lookaside[0x%02x] - No. of chunks: %d, ListEntry: 0x%08x, Size: 0x%02x (%d+8=%d)" % (entry, entry_chunks[0][0], entry_chunks[0][1], (entry*self.block+self.block), (entry*self.block), (entry*self.block+self.block)) )
+                            self.heaper.window.Log("")
+                            self.heaper.window.Log("    Chunk:")
+                            self.heaper.window.Log("    ~~~~~~~")
+                            if (a[1]+self.block) == a[3]: 
+                                self.heaper.window.Log("    "+"*" * 92)
+                                self.heaper.window.Log("    chunk (%d): 0x%08x, flink: 0x00000000, size: %d (0x%02x), cookie: 0x%x <= fake chunk created!" % (a[0],a[1],a[4],a[4],a[5]), address = a[1])
+                                self.heaper.window.Log("    "+"*" * 92)
+
+                            # size is pwned, maybe other things as well (but not flink)                   
+                            elif (a[1]+self.block) != a[3]:
+                                self.heaper.window.Log("    "+"*" * 111)
+                                self.heaper.window.Log("    chunk (%d): 0x%08x, flink: 0x%08x, size: %d (0x%02x), cookie: 0x%x <= size/chunk corruption detected!" % (a[0],a[1],a[3],a[4],a[4],a[5]), address = a[1])
+                                self.heaper.window.Log("    "+"*" * 111)
+                                self.heaper.window.Log("")
+                                self.heaper.window.Log("(!) Try overwriting the flink as well!")
+
+                        # detect corruption, size and flink pwned
+                        elif a[2] and a[4] != entry and masked_size == masked_flink:
+                            vuln_chunks += 1
+                            self.heaper.window.Log("")
+                            self.heaper.window.Log("Lookaside[0x%02x] - No. of chunks: %d, ListEntry: 0x%08x, Size: 0x%02x (%d+8=%d)" % (entry, entry_chunks[0][0], entry_chunks[0][1], (entry*self.block+self.block), (entry*self.block), (entry*self.block+self.block)) )
+                            self.heaper.window.Log("")
+                            self.heaper.window.Log("    Chunk:")
+                            self.heaper.window.Log("    ~~~~~~~")
+                            self.heaper.window.Log("    "+"*" * 106)
+                            self.heaper.window.Log("    chunk (%d): 0x%08x, flink: 0x%08x, size: %d (0x%02x), cookie: 0x%x <= flink corruption detected!" % (a[0],a[1],a[3],a[4],a[4],a[5]), address = a[1])
+                            self.heaper.window.Log("    "+"*" * 106)
+                            print_exploitation_details(entry)
+            self.heaper.window.Log("")
+            self.heaper.window.Log("(!) Found %d vulnerable chunk(s) in heap 0x%08x" % (vuln_chunks, self.heaper.heap))
+            self.heaper.window.Log("")
+        elif not self.heaper.pheap.Lookaside:
+            self.heaper.window.Log("")
+            self.heaper.window.Log("(-) Heap 0x%08x does not have the Lookaside set, this could be from an invalid heap address" % self.heaper.heap)
+            self.heaper.window.Log("")
+            return ("(-) Heap 0x%08x does not have the Lookaside set, this could be from an invalid heap address" % self.heaper.heap)    
+
     def set_lookaside_chunks(self):
         """
         sets up the lookaside chunks datastructure into self.lookaside_chunks
@@ -2408,7 +2433,8 @@ class Lookaside(Front_end):
 
     def print_lookaside(self, verbose=False):
         """
-        prints the Lookaside of the current heap
+        prints the Lookaside of the current heap and does a quick check
+        for overwritten chunks
         """ 
         if not verbose:
             for bin_index, lists in self.lookaside_chunks.iteritems():
@@ -2449,10 +2475,56 @@ class Lookaside(Front_end):
             for bin_index, lists in self.lookaside_chunks.iteritems():
                 if len(lists[0]) == 0:
                     ListEntry = lookaside_entry + (0x30 * bin_index)
-                    self.heaper.window.Log("Lookaside[0x%02x] - No. of chunks: 0, ListEntry: 0x%08x, Size: 0x%02x (%d+8=%d)" % (bin_index, ListEntry, (bin_index*self.block+self.block), (bin_index*self.block), (bin_index*self.block+self.block)) )
+                    self.heaper.window.Log("Lookaside[0x%02x] - No. of chunks: 0, ListEntry: 0x%08x, Size: 0x%02x (%04d+8=%d)" % (bin_index, ListEntry, (bin_index*self.block+self.block), (bin_index*self.block), (bin_index*self.block+self.block)) )
                 elif len(lists[0]) > 0:
                     bin_data = lists[0]                  
                     self.heaper.window.Log("Lookaside[0x%02x] - No. of chunks: %d, ListEntry: 0x%08x, Size: 0x%02x (%d+8=%d)" % (bin_index, bin_data[0], bin_data[1], (bin_index*self.block+self.block), (bin_index*self.block), (bin_index*self.block+self.block)) )
+
+                    # ntdll!_GENERAL_LOOKASIDE
+                    #    +0x000 ListHead         : _SLIST_HEADER
+                    #    +0x008 Depth            : Uint2B
+                    #    +0x00a MaximumDepth     : Uint2B
+                    #    +0x00c TotalAllocates   : Uint4B
+                    #    +0x010 AllocateMisses   : Uint4B
+                    #    +0x010 AllocateHits     : Uint4B
+                    #    +0x014 TotalFrees       : Uint4B
+                    #    +0x018 FreeMisses       : Uint4B
+                    #    +0x018 FreeHits         : Uint4B
+                    #    +0x01c Type             : _POOL_TYPE
+                    #    +0x020 Tag              : Uint4B
+                    #    +0x024 Size             : Uint4B
+                    #    +0x028 Allocate         : Ptr32     void* 
+                    #    +0x02c Free             : Ptr32     void 
+                    #    +0x030 ListEntry        : _LIST_ENTRY
+                    # ntdll!_SLIST_HEADER
+                    #    +0x000 Alignment        : Uint8B
+                    #    +0x000 Next             : _SINGLE_LIST_ENTRY
+                    #    +0x004 Depth            : Uint2B
+                    #    +0x006 Sequence         : Uint2B
+                    # ntdll!_SINGLE_LIST_ENTRY
+                    #    +0x000 Next             : Ptr32 _SINGLE_LIST_ENTRY
+                mem = self.imm.readMemory( ListEntry, 0x30 )               
+                ( Next, Depth, Sequence, Depth2, MaximumDepth,\
+                TotalAllocates, AllocateMisses, TotalFrees,\
+                FreeMisses, Type, Tag, Size, Allocate, Free) = struct.unpack("LHHHHLLLLLLLLL", mem)
+                self.heaper.window.Log("+0x000 ListHead (_SLIST_HEADER):")
+                self.heaper.window.Log(" +0x000 Next: 0x%08x" % (Next), Next)
+                self.heaper.window.Log(" +0x004 Depth: 0x%02x" % (Depth), Depth)
+                self.heaper.window.Log(" +0x006 Sequence: 0x%02x" % (Sequence), Sequence) 
+                self.heaper.window.Log("+0x008 Depth: 0x%04x" % (Depth2), Depth2)
+                self.heaper.window.Log("+0x00a MaximumDepth: 0x%04x" % (MaximumDepth), MaximumDepth)
+                self.heaper.window.Log("+0x00c TotalAllocates: 0x%04x" % (TotalAllocates), TotalAllocates)
+                self.heaper.window.Log("+0x010 AllocateMisses: 0x%04x" % (AllocateMisses), AllocateMisses)
+                self.heaper.window.Log("+0x010 AllocateHits: 0x%04x" % (AllocateMisses), AllocateMisses)
+                self.heaper.window.Log("+0x014 TotalFrees: 0x%04x" % (TotalFrees), TotalFrees)
+                self.heaper.window.Log("+0x018 FreeMisses: 0x%04x" % (FreeMisses), FreeMisses)
+                self.heaper.window.Log("+0x018 FreeHits: 0x%04x" % (FreeMisses), FreeMisses)
+                self.heaper.window.Log("+0x01c Type: 0x%04x" % (Type), Type)
+                self.heaper.window.Log("+0x020 Tag: 0x%04x" % (Tag), Tag)
+                self.heaper.window.Log("+0x024 Size: 0x%04x" % (Size), Size)
+                self.heaper.window.Log("+0x028 Allocate: 0x%04x" % (Allocate), Allocate)
+                self.heaper.window.Log("+0x02c Free: 0x%04x" % (Free), Free)
+                if len(lists[0]) > 0:   
                     self.heaper.window.Log("")
                     if len(lists[1]) > 0:
                         for a in lists[1]:
@@ -2466,9 +2538,9 @@ class Lookaside(Front_end):
                                     self.heaper.window.Log("    chunk (%d): 0x%08x, flink: 0x00000000, size: %d (0x%02x), cookie: 0x%x <= fake chunk created!" % (a[0],a[1],a[4],a[4],a[5]), address = a[1])
                                     self.heaper.window.Log("    "+"*" * 92)                            
                                 elif (a[1]+self.block) != a[3]:
-                                    self.heaper.window.Log("    "+"*" * 100)
+                                    self.heaper.window.Log("    "+"*" * 111)
                                     self.heaper.window.Log("    chunk (%d): 0x%08x, flink: 0x%08x, size: %d (0x%02x), cookie: 0x%x <= size/chunk corruption detected!" % (a[0],a[1],a[3],a[4],a[4],a[5]), address = a[1])
-                                    self.heaper.window.Log("    "+"*" * 100)
+                                    self.heaper.window.Log("    "+"*" * 111)
              
                             # detect corruption, size overwrite only
                             elif a[2] and a[4] != bin_index and masked_size == masked_flink:
@@ -2479,10 +2551,10 @@ class Lookaside(Front_end):
                             # corruption not detected
                             elif not a[2] and a[4] > 0:
                                 self.heaper.window.Log("    chunk (%d): 0x%08x, flink: 0x%08x, size: %d (0x%02x), cookie: 0x%x" % (a[0],a[1],a[3],a[4],a[4],a[5]), address = a[1])
-                        self.heaper.window.Log("")
-                        self.heaper.window.Log("-" * 80)
-                        self.heaper.window.Log("")
-        
+                self.heaper.window.Log("")
+                self.heaper.window.Log("=" * 80)
+                self.heaper.window.Log("")
+
     def generate_lookaside_graph(self, verbose=False):
         """
         Generates the Lookaside graph using pydot. It analyses the self.lookaside_chunks
@@ -2559,7 +2631,7 @@ class Lookaside(Front_end):
 
         # save the output
         lalgraph.write_png(output_folder+self.filename + ".png")
-        
+
         # return the filename
         return output_folder+self.filename + ".png"
 
@@ -2577,6 +2649,62 @@ class Freelist(Back_end):
         """
         perform heuristics for FreeList[n] and FreeList[0]
         """
+
+        # attacks against FreeList[0] and FreeList[n]
+        def print_bitmap_flip_attack():
+            self.heaper.window.Log("Information regarding Bitmap flip attack:")
+            self.heaper.window.Log("=========================================")
+            self.heaper.window.Log("")
+            self.heaper.window.Log("Three ways to trigger a bitmap flip (FreeListInUse) for size 0x41:")
+            self.heaper.window.Log("")
+            self.heaper.window.Log("- Trigger a heap overflow and modify the size only of a FreeList[n] chunk (must be the only chunk in that FreeList[n] entry).")
+            self.heaper.window.Log("  You modify it with a size that you want to flip at (ideally 0x41). So when the overflown chunk is allocated, it will switch")
+            self.heaper.window.Log("  the FreeList entry corresponding to the modified size.")
+            self.heaper.window.Log("- Trigger a heap overflow and modify the size, flink/blink and set the chunk flag to 0x10 of a FreeList[n] chunk (it doesnt ")
+            self.heaper.window.Log("  matter if the FreeList[n] entry has multiple chunks). You made  the flink and blink the same value and set the flag, so the")
+            self.heaper.window.Log("  allocation algorithm will think they are the last chunk on a freelist entry. When you allocate that chunk, the FreeListInUse")
+            self.heaper.window.Log("  entry corresponding to the modified size will be flipped to 1.")
+            self.heaper.window.Log("- You gain control of a primitive via a 'inc ( ptr )'. You  modify the FreeListInUse for size 0x41. Allocate a chunk of ")
+            self.heaper.window.Log("  size 0x41 - Who says you even need a heap overflow?")
+            self.heaper.window.Log("")
+            self.heaper.window.Log("(+) Calculation: (0x41 * 0x8) - 0x8 = 0x200/512 bytes.")
+            self.heaper.window.Log("(+) Now the distance between heapbase+0x57c (RtlCommitRoutine pointer) and heapbase+0x380 (FreeList[41] entry address) is 508 bytes.")
+            self.heaper.window.Log("    Now if we allocate from FreeList[41] we can fill the buffer up to 512 bytes and we would only JUST allocate and overwrite the pointer")
+            self.heaper.window.Log("    at offset 0x57c of the heapbase. This will ensure we trigger the RtlCommitRoutine pointer that is under control when trying to force")
+            self.heaper.window.Log("    a large allocation without any access violations.")
+
+        def print_freelist_zero_attacks():
+            self.heaper.window.Log("Information regarding FreeList[0] attacks")
+            self.heaper.window.Log("=" * 41)
+            self.heaper.window.Log("")                      
+            self.heaper.window.Log("1. Freelist[0] insert attack:")
+            self.heaper.window.Log("-" * 29)
+            self.heaper.window.Log("The idea here is overwrite a chunks blink and set it to a lookaside[n] entry or function pointer table")
+            self.heaper.window.Log("1. Overwriten chunk's blink will be set to the Lookaside[n] list entry")
+            self.heaper.window.Log("2. Free chunk is inserted BEFORE the overwritten chunk write the address of the free chunk into blinks address (blink->inserted_chunk)")            
+            self.heaper.window.Log("3. Now lookaside[n]->inserted_chunk->overwritten_chunk->controlled_flink")
+            self.heaper.window.Log("4. Now pop 3 chunks off the lookaside[n] to get the controlled flink returned from RtlAllocateHeap")
+            self.heaper.window.Log("5. Overwrite a function pointer")
+            self.heaper.window.Log("")
+            self.heaper.window.Log("2. Freelist[0] search attack:")
+            self.heaper.window.Log("-" * 29)
+            self.heaper.window.Log("The idea here is overwrite a chunks flink and set it to a fake chunk.")
+            self.heaper.window.Log("1. Set the flink to an address at the base of the heap (eg: heapbase+0x188)")
+            self.heaper.window.Log("2. When a size that is bigger than the overwritten chunk is requested, it will return the fake chunk address-0x8 (heapbase+0x180)")                   
+            self.heaper.window.Log(" - You can set it to FreeList[0x41] or FreeList[0x42] and overwrite the RtlCommitRoutine pointer at offset heapbase+0x578")
+            self.heaper.window.Log(" - Or you could overwrite the blink/flink of a FreeList[n] entry itself..?")
+            self.heaper.window.Log("")
+            self.heaper.window.Log("3. Freelist[0] relinking attack:")
+            self.heaper.window.Log("-" * 32)
+            self.heaper.window.Log("The idea here is to control flink, so that you can indirectly control address that WILL point to the blink of the fake chunk")
+            self.heaper.window.Log("1. The chunk gets split and the relink chunk is inserted BEFORE the fake chunk")
+            self.heaper.window.Log("2. The address of the relink chunk is written to the fake chunks blink")
+            self.heaper.window.Log("3. The idea is to overwrite the pointer to the Lookaside (heapbase+0x580) with a pointer to the fake chunk")
+            self.heaper.window.Log(" - set the flink to be heapbase+0x57c")
+            self.heaper.window.Log(" - set the fake chunk to be heapbase+0x574")
+            self.heaper.window.Log(" - flink of fake chunk will be at heapbase+0x57c")
+            self.heaper.window.Log(" - blink of fake chunk will be heapbase+0x580, thus overwriting heapbase+0x688 with the relink chunk address")   
+
         vuln_chunks = 0
         self.heaper.window.Log("")
         for data in self.freelist_chunks.itervalues():
@@ -2605,31 +2733,36 @@ class Freelist(Back_end):
                             self.heaper.window.Log("        "+"*" * 86)
                             self.heaper.window.Log("                [%d]: size: 0x%04x | calculated size: %d (0x%04x) - cookie: 0x%02x <= %s overwrite!" % 
                             (chunk_data[0], chunk_data[4], (chunk_data[4] * 0x8), (chunk_data[4] * 0x8), chunk_data[5], chunk_data[7]), chunk_data[1])
-                            self.heaper.window.Log("        "+"*" * 86)             
+                            self.heaper.window.Log("        "+"*" * 86)   
                             self.heaper.window.Log("")
+                            if chunk_data[7] == "size":
+                                if not self.heaper.pheap.HeapCache:
+                                    self.heaper.window.Log("(+) If you can trigger the HeapCache to be activated, you can possibly exploit this condition using a De-synchronization attack")
+                                    self.heaper.window.Log("(+) Also, if you can write more data, you maybe able to perform a Freelist[0] insert, search or relink attack")
+                                elif self.heaper.pheap.HeapCache:
+                                    self.heaper.window.Log("(+) The HeapCache appears to be activated, you maybe able to perform a De-synchronization attack")
+                            elif chunk_data[7] != "size":
+                                if list_entry[0] == 0x00:
+                                    print_freelist_zero_attacks()
+                                elif list_entry[0] != 0x00:
+                                    print_bitmap_flip_attack()
                 i += 1
         self.heaper.window.Log("(!) Found %d vulnerable chunk(s) in heap 0x%08x" % (vuln_chunks, self.heaper.heap))
         self.heaper.window.Log("")
 
     # set methods
-    def set_heapcache_bitmap(self, get_chunk_dict=False):
-        bit_list = {}
-        chunk_dict = {}
-        for a in range(0, len(self.heaper.pheap.HeapCache.Buckets)):
-            if self.heaper.pheap.HeapCache.Buckets[a]:
-                bit_list[a+0x80] = 1
-                if get_chunk_dict:
-                    chunk_dict[self.heaper.pheap.HeapCache.Buckets[a]] = a + 0x80 # not sure why I did this, need to double check...
-            else:
-                bit_list[a+0x80] = 0
-        if get_chunk_dict:
-            return bit_list, chunk_dict
-        else:
-            return bit_list
-
     # here we can patch FreeListInUse depending on what
     # values the user sets
     def set_freelistinuse_bitmap(self, value):
+        """
+        Updates the FreeListInUse bitmap to whatever value the user specifies
+
+        @type value: Int
+        @param param: Value
+
+        @rtype: -
+        @return: -
+        """
         fliu_0 = list(self.heaper.pheap.decimal2binary(self.heaper.pheap.FreeListInUseLong[0]))
         fliu_1 = list(self.heaper.pheap.decimal2binary(self.heaper.pheap.FreeListInUseLong[1]))
         fliu_2 = list(self.heaper.pheap.decimal2binary(self.heaper.pheap.FreeListInUseLong[2]))
@@ -2676,13 +2809,13 @@ class Freelist(Back_end):
     def set_freelist_chunks(self):
         """                    
         sets the following datastruture into self.feelist_chunks:
-        
+
             Entry:
                 0. bin size
                 1. freelist[n] address
                 2. blink
                 3. flink
-                
+
                 Chunks:
                     0. chunk number (in order)
                     1. chunk address
@@ -2693,48 +2826,54 @@ class Freelist(Back_end):
                     6. chunk cookie
                     7. description upon validation
                     8. boolean on passing validation (True/False)
+        @type  -
+        @param -
+        @return -
         """
-        for a in range(0, 128):
-            entry = self.heaper.pheap.FreeList[a]
+        self.freelist_chunks = {}
+        vuln_chunk = False
+        for bin_entry in range(0, 128):
+            entry = self.heaper.pheap.FreeList[bin_entry]
             e = entry[0]
             if e[0]:
                 if len(entry[1:]) >= 1:
                     chunk_num = 0
 
                     # freelist entry structure
-                    self.freelist_chunks[a] = []
-                    self.freelist_chunks[a].append([])
-                    self.freelist_chunks[a].append([])
-                    self.freelist_chunks[a][0].append(a)        # bin
-                    self.freelist_chunks[a][0].append(e[0])     # freelist[n] address
-                    self.freelist_chunks[a][0].append(e[1])     # blink
-                    self.freelist_chunks[a][0].append(e[2])     # flink
+                    self.freelist_chunks[bin_entry] = []
+                    self.freelist_chunks[bin_entry].append([])
+                    self.freelist_chunks[bin_entry].append([])
+                    self.freelist_chunks[bin_entry][0].append(bin_entry)        # bin
+                    self.freelist_chunks[bin_entry][0].append(e[0])             # freelist[n] address
+                    self.freelist_chunks[bin_entry][0].append(e[1])             # blink
+                    self.freelist_chunks[bin_entry][0].append(e[2])             # flink
                     for fc in entry[1:]:
                         if len(entry[1:]) == 1:
                             prevchunk_address = e[0]
                         else:
                             prevchunk_address = entry[1:][entry[1:].index(fc)-1][0]
-                        try:
-                            nextchunk_address = entry[1:][entry[1:].index(fc)+1][0]
-                        except:
-                            nextchunk_address = 1
                         chunk_address   = fc[0]
                         chunk_blink     = fc[1]
                         chunk_flink     = fc[2]
+
+                        # used to validate the flink fron the tuple
+                        nextchunk_address = None
+                        if (entry[1:].index(fc)+1) <= (len(entry[1:])-1):
+                            nextchunk_address = entry[1:][entry[1:].index(fc)+1][0]
+                        chunk_cookie = self.heaper.imm.readMemory(chunk_address-0x4, 1) # chunk_address includes header
+                        chunk_cookie = struct.unpack("B", chunk_cookie)[0]
+                        chunk_num += 1
                         try:
-                            sz = self.heaper.pheap.get_chunk( chunk_address - self.heaper.block ).size
+                            chunk_size = self.heaper.pheap.get_chunk( chunk_address - self.heaper.block ).size
 
                             # avoid freelist[0] as it can be anything > 1016
-                            if a != 0:
-                                calc_sz = (sz * self.heaper.block) - self.heaper.block
+                            if bin_entry != 0:
+                                calc_sz = (chunk_size * self.heaper.block) - self.heaper.block
                             else:
                                 calc_sz = 0
                         except:
                             calc_sz = 0
-                            sz = 0
-                        chunk_cookie = self.heaper.imm.readMemory(chunk_address-0x4, 1) # chunk_address includes header
-                        chunk_cookie = struct.unpack("B", chunk_cookie)[0]
-                        chunk_num += 1
+                            chunk_size = 0
 
                         # chunk structure
                         chunk_data = []
@@ -2742,67 +2881,120 @@ class Freelist(Back_end):
                         chunk_data.append(chunk_address)                    # chunk address
                         chunk_data.append(chunk_blink)                      # chunk blink address
                         chunk_data.append(chunk_flink)                      # chunk flink address
-                        chunk_data.append(sz)                               # chunk size (bin)
+                        chunk_data.append(chunk_size)                               # chunk size (bin)
                         chunk_data.append(calc_sz)                          # chunk size (user size)
-                        chunk_data.append(chunk_cookie)                     # chunk cookie     
-
-                        if a != 0:
+                        chunk_data.append(chunk_cookie)                     # chunk cookie
+                        if bin_entry != 0:
 
                             # now lets validate the integrity of the linked list using safe unlinking checks
                             # Not the last chunk in the entry..
-                            if sz != a and nextchunk_address != 1:
-                                if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
+                            #if chunk_size != bin_entry and nextchunk_address != 1:
+                            if chunk_size != bin_entry and nextchunk_address:
+                                if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address and not vuln_chunk:
+                                    vuln_chunk = True
                                     chunk_data.append("Size, Flink and Blink")          # chunk validation failed
                                     chunk_data.append(True)                             # chunk validation failed
-                                else:
+                                elif not vuln_chunk:
+                                    vuln_chunk = True
                                     chunk_data.append("Size")                           # chunk validation failed
                                     chunk_data.append(True)                             # chunk validation failed                           
 
                             # now lets validate the integrity of the linked list using safe unlinking checks and size validation
-                            # Last chunk in the entry..
-                            elif sz != a and nextchunk_address == 1:
-                                if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
+                            # Last chunk in the entry...                          
+                            elif chunk_size != bin_entry and not nextchunk_address:
+                                if not vuln_chunk and (prevchunk_address != chunk_blink and chunk_flink != nextchunk_address):
+                                    vuln_chunk = True
                                     chunk_data.append("Size, Flink and Blink")          # chunk validation failed
                                     chunk_data.append(True)                             # chunk validation failed
-                                else:
+                                elif not vuln_chunk:
+                                    vuln_chunk = True
                                     chunk_data.append("Size")                           # chunk validation failed
-                                    chunk_data.append(True)                             # chunk validation failed 
+                                    chunk_data.append(True)                             # chunk validation failed
                             else:
                                 chunk_data.append("validated")                          # chunk validation passed
                                 chunk_data.append(False)                                # chunk validation passed
-                        elif a == 0:
+
+                        # FreeList[0]
+                        elif bin_entry == 0:
 
                             # check if this chunk is not the last chunk in the entry
-                            if nextchunk_address != 1:
-                                if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
+                            if not nextchunk_address:
+                                if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address and not vuln_chunk:
+                                    vuln_chunk = True
                                     chunk_data.append("Size, Flink and Blink")          # chunk validation failed
-                                    chunk_data.append(True)                             # chunk validation failed 
-                                else:
-                                    chunk_data.append("validated")                      # chunk validation passed
-                                    chunk_data.append(False)                            # chunk validation passed                       
+                                    chunk_data.append(True)                              # chunk validation failed
 
-                            # last chunk
-                            elif nextchunk_address == 1:            
-                                if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address:
+                                # Now that we know the blink is in tack, 
+                                # lets check the size against the blinks size.
+                                # Here we can only see if its < or > based on the FreeList[0]
+                                elif prevchunk_address == chunk_blink:
+
+                                    # previous and next chunks size fields 
+                                    # we will have an flink, but it should point to the node entry                           
+                                    chunk_blink_size = self.heaper.imm.readMemory(chunk_blink-0x8, 2)
+                                    chunk_blink_size = struct.unpack("H", chunk_blink_size)[0]
+                                    chunk_flink_size = self.heaper.imm.readMemory(chunk_flink-0x8, 2)
+                                    chunk_flink_size = struct.unpack("H", chunk_flink_size)[0]
+                                    if chunk_size > chunk_blink_size and chunk_size < chunk_flink_size:
+                                        chunk_data.append("validated")                                   # chunk validation passed
+                                        chunk_data.append(False)                                         # chunk validation passed
+                                    elif not vuln_chunk and (chunk_size < chunk_blink_size or chunk_size > chunk_flink_size) and (chunk_blink_size != 0 and chunk_flink_size != 0):
+                                        vuln_chunk = True
+                                        chunk_data.append("size")                                        # it was a size issue
+                                        chunk_data.append(True)                                          # chunk validation Failed
+                                    else:
+                                        chunk_data.append("validated")                                   # chunk validation passed
+                                        chunk_data.append(False)                                         # chunk validation passed
+                                else:
+                                    chunk_data.append("validated")                                       # chunk validation passed
+                                    chunk_data.append(False)                                             # chunk validation passed                           
+
+                            # we are not the last chunk so we can check the flink :-)
+                            elif nextchunk_address:           
+                                if not vuln_chunk and (prevchunk_address != chunk_blink and chunk_flink != nextchunk_address):
+                                    vuln_chunk = True
                                     chunk_data.append("Size, Flink and Blink")          # chunk validation failed
                                     chunk_data.append(True)                             # chunk validation failed                        
+
+                                # Now that we know the blink and flink are in tack, 
+                                # lets check the size against the blink/flink sizes.
+                                # Here we can only see if its < or > based on the FreeList[0]
+                                elif chunk_flink == nextchunk_address and prevchunk_address == chunk_blink:
+
+                                    # previous and next chunks size fields                            
+                                    chunk_blink_size = self.heaper.imm.readMemory(chunk_blink-0x8, 2)
+                                    chunk_blink_size = struct.unpack("H", chunk_blink_size)[0]
+                                    chunk_flink_size = self.heaper.imm.readMemory(chunk_flink-0x8, 2)
+                                    chunk_flink_size = struct.unpack("H", chunk_flink_size)[0]
+                                    if chunk_size > chunk_blink_size and chunk_size < chunk_flink_size:
+                                        chunk_data.append("validated")                                   # chunk validation passed
+                                        chunk_data.append(False)                                         # chunk validation passed
+                                    elif not vuln_chunk and (chunk_size < chunk_blink_size or chunk_size > chunk_flink_size):
+                                        vuln_chunk = True
+                                        chunk_data.append("size")                                        # it was a size issue
+                                        chunk_data.append(True)                                          # chunk validation Failed
+                                    else:
+                                        chunk_data.append("validated")                                   # chunk validation passed
+                                        chunk_data.append(False)                                         # chunk validation passed
                                 else:
-                                    chunk_data.append("validated")                      # chunk validation passed
-                                    chunk_data.append(False)                            # chunk validation passed 
+                                    chunk_data.append("validated")                                       # chunk validation passed
+                                    chunk_data.append(False)                                             # chunk validation passed                                 
 
                             # else just check blink
                             # code probably never lands here... will check and remove soon
                             else:
-                                if prevchunk_address != chunk_blink:
+                                if not vuln_chunk and (prevchunk_address != chunk_blink):
+                                    vuln_chunk = True
                                     chunk_data.append("Flink and Blink")                # chunk validation failed
                                     chunk_data.append(True)                             # chunk validation failed
                                 else:
                                     chunk_data.append("validated")                      # chunk validation passed
                                     chunk_data.append(False)                            # chunk validation passed 
-                        self.freelist_chunks[a][1].append(chunk_data)
+                        self.freelist_chunks[bin_entry][1].append(chunk_data)
 
     # get the bits for each freelist[n] entry
     def get_freelistinuse(self):
+
         # ensure we are dealing with 32 bit integers only, lose the LSB
         bitblocks = "%s%s%s%s" % (self.heaper.pheap.decimal2binary(self.heaper.pheap.FreeListInUseLong[0])[0:32],
                                   self.heaper.pheap.decimal2binary(self.heaper.pheap.FreeListInUseLong[1])[0:32],
@@ -2826,10 +3018,36 @@ class Freelist(Back_end):
                 self.heaper.window.Log("FreeList[0x%x] = %d" % (i,b))
             i+= 1
 
+    def get_heapcache_bitmap(self, get_chunk_dict=False):
+        """
+        sets the bitmap for the HeapCache
+
+        @type get_chunk_dict: Boolean
+        @param get_chunk_dict: Boolean flag for a chunk dictionary
+
+        @rtype: List
+        @return: Bitmap list of all entries where allocated chunks reside.
+        """
+        bit_list = {}
+        chunk_dict = {}
+        for a in range(0, len(self.heaper.pheap.HeapCache.Buckets)):
+            if self.heaper.pheap.HeapCache.Buckets[a]:
+                bit_list[a+0x80] = 1
+                if get_chunk_dict:
+                    chunk_dict[self.heaper.pheap.HeapCache.Buckets[a]] = a + 0x80 # not sure why I did this, need to double check...
+            else:
+                bit_list[a+0x80] = 0
+        if get_chunk_dict:
+            return bit_list, chunk_dict
+        else:
+            return bit_list
+
     # print methods
     def print_heapcache_bitmap(self):
-        bit_list = self.set_heapcache_bitmap()
-        
+        """
+        prints the heap cache bitmap 
+        """
+        bit_list = self.get_heapcache_bitmap()
         for k,v in bit_list.items():
             self.heaper.window.Log("bucket[0x%03x] = %d" % (k,v))   
 
@@ -2888,13 +3106,13 @@ class Freelist(Back_end):
     def print_freelist(self, verbose=False):
         """
         sets the following datastruture into self.feelist_chunks:
-        
+
             Entry:
                 0. bin size
                 1. freelist[n] address
                 2. blink
                 3. flink
-                
+
                 Chunks:
                     0. chunk number (in order)
                     1. chunk address
@@ -3025,16 +3243,14 @@ class Freelist(Back_end):
             # build the datastructure
             chunk_dict[bin_index] = [freelist_node, chunk_nodes]
 
-        # write the graph      
+        # write the graph
         for listentry_node, chunk_node in chunk_dict.iteritems():
 
-            # if verbose mode, link all the bins
+            # if verbose mode, link all the bins (will update this code segment one day...)
             if verbose:
                 freelistgraph.add_node(chunk_node[0])
                 try:
                     freelistgraph.add_edge(pydot.Edge(chunk_dict[listentry_node][0], chunk_dict[listentry_node+1][0]) )
-
-                # i know this is bad code, but deal with it.
                 except:
                     pass
             if len(chunk_node[1]) > 0:
@@ -3276,8 +3492,8 @@ def main(args):
                     heaper.window.Log("")
                 return "(+) Finsihed setting the config"
 
-        # exploit heuristics for a given heap
-        # ===================================
+        # exploit heuristics for a all heaps
+        # ==================================
         elif args[0].lower().strip() == "exploit" or args[0].lower().strip() == "exp":
             all_heaps = args[1].lower().strip().lower()
             if all_heaps == "all":
@@ -3299,9 +3515,30 @@ def main(args):
                             heaper.pheap    = imm.getHeap( heaper.heap )
                             frontend        = Lfh(heaper)
                             frontend.run()
-                            frontend.set_chunks()                    
+                            frontend.set_lfh_chunks()                    
                             frontend.perform_heuristics()
+                elif heaper.os < 6.0:
+                    for heap_handle in imm.getHeapsAddress():
+                        if "-b" in args and "-f" not in args:
+                            heaper.heap     = heap_handle
+                            heaper.pheap    = imm.getHeap( heaper.heap )
+                            backend         = Freelist(heaper)
+                            backend.run() 
+                            backend.set_freelist_chunks() 
+                            backend.perform_heuristics()
+                        elif "-f" in args and "-b" not in args:  
+                            heaper.heap     = heap_handle
+                            heaper.pheap    = imm.getHeap( heaper.heap )
+                            frontend        = Lookaside(heaper)
+                            frontend.run()
+                            frontend.set_lookaside_chunks()                    
+                            frontend.perform_heuristics()
+                
+                heaper.window.Log("=" * 40)
                 return "(!) Scanned all %d heap(s)" % len(imm.getHeapsAddress())
+            
+            
+            
             elif not int(all_heaps, 16):
                 heaper.window.Log("")
                 heaper.window.Log("(!) invalid option '%s': try !heaper help exploit" % all_heaps)
@@ -3351,6 +3588,8 @@ def main(args):
         # commands that require use of a heap
         # ===================================
         if (args[0].lower().strip() in heaper.available_commands and args[0].lower().rstrip() not in ["help","-h"]):
+            
+            # This doesnt catch everything, but we try to catch most problems here regarding the heap address...
             try:
                 heap = args[1].lower().strip()
                 heaper.heap = int( heap,16 )
@@ -3373,7 +3612,7 @@ def main(args):
                 return "(-) Invalid heap address or cannot read address!"
             if heaper.pheap.address:
                 if heaper.os < 6.0:
-                    frontend   = Lookaside(imm, heaper)
+                    frontend   = Lookaside(heaper)
                     backend    = Freelist(heaper)
                 elif heaper.os >= 6.0:
                     frontend    = Lfh(heaper)
@@ -3438,10 +3677,9 @@ def main(args):
                                     heaper.window.Log("(+) Generated graph: %s" % frontend.generate_lookaside_graph())
                                     heaper.window.Log("")
                             return "(+) Lookaside analysis complete"
-                        else:
-                            imm.getDebuggedName()
+                        elif frontend.FrontEndHeapType == 0x2:                            
                             heaper.window.Log("(!) The %s process is running under NT 5.X and using the LFH" % imm.getDebuggedName())
-                            heaper.window.Log("(!) If you reach this, email mr_me to fix the issue (he can be lazy)")
+                            heaper.window.Log("(!) If you reach this, email mr_me to fix the issues in immlib & heaplib")
                             heaper.window.Log("=" * 40)
                             return "(!) The %s process is running under NT 5.X and using the LFH" % imm.getDebuggedName()
                     elif "-l" not in args:
@@ -3471,9 +3709,9 @@ def main(args):
                                 window.Log("")
                                 return "(-) This size is not within the UserBlocks range!"
                             else:
-                                frontend.set_chunks(switch["Bin_size"])
+                                frontend.set_lfh_chunks(switch["Bin_size"])
                         else:
-                            frontend.set_chunks()           
+                            frontend.set_lfh_chunks()           
                         if "-b" in args:
                             switch["bucket_flag"] = True
                         if "-c" in args:
@@ -3571,12 +3809,12 @@ def main(args):
                         if backend.graphic_structure:
                             backend.generate_freelist_graph()
 
-            # perform hueristics
-            # ==================
+            # perform hueristics against a specfic heap
+            # =========================================
             elif args[0].lower().strip() == "exploit" or args[0].lower().strip() == "exp":
                 if heaper.os >= 6.0:    
                     backend.set_listhintfreeList_chunks()
-                    frontend.set_chunks()
+                    frontend.set_lfh_chunks()
                 elif heaper.os < 6.0:
                     backend.set_freelist_chunks()    
                     frontend.set_lookaside_chunks()        
@@ -3760,9 +3998,9 @@ def main(args):
                         extra = ""                           
                         if heaper.heap:
                             if heaper.heap == a[1][0]:
-                                hook.set_chunks(a, rtlallocate)                           
+                                hook.set_lfh_chunks(a, rtlallocate)                           
                         else:
-                            hook.set_chunks(a, rtlallocate)
+                            hook.set_lfh_chunks(a, rtlallocate)
                     for chunk in hook.managed_chunks:
 
                         # if the number of frees for a given chunk exceed the number of allocations
