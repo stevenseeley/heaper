@@ -1725,7 +1725,6 @@ class Lfh(Front_end):
     # print methods
     def print_chunks(self, size=False): 
         for chunks in self.lfh_userblocks_chunks.itervalues():
-            self.heaper.window.Log("test1")
             userblocks_info = chunks[0]
             self.heaper.window.Log("")
             self.heaper.window.Log("(+) Dumping UserBlocks from =>")
