@@ -149,12 +149,14 @@ class Heaper:
         extusage["hardhook"] += "------------------------------------------------------------------------------\n"
         extusage["hardhook"] += "Use -h to hook RtlAllocateHeap and RtlFreeHeap.\n"
         extusage["hardhook"] += "Use -u to unhook previously hooked functions.\n"
+        extusage["hardhook"] += "Use -s to show the hooked results.\n"
         extusage["hardhook"] += "Available options to use: \n"
         extusage["hardhook"] += "-a                 : filter by chunk address\n"
         extusage["hardhook"] += "-h                 : enable the hook on\n"   
         extusage["hardhook"] += "-d                 : disable the hooks\n"
         extusage["hardhook"] += "-c                 : clear the hooks\n"
         extusage["hardhook"] += "-p                 : pause hook execution\n"
+        extusage["hardhook"] += "-d                 : to scan for double frees (requires -s)\n"
         extusage["hardhook"] += "-C                 : Continue hook execution\n"
         extusage["hardhook"] += "Examples:\n"
         extusage["hardhook"] += "~~~~~~~~~\n"
@@ -265,8 +267,8 @@ class Heaper:
         extusage["exploit"] += "~~~~~~~~~\n"
         extusage["exploit"] += "Validate all heaps for overwritten chunks in the frontend - '!heaper exploit all -f'\n"
         extusage["exploit"] += "Validate the 0x00490000 heap's backend for overwritten chunks - '!heaper exploit 0x00490000 -b'\n"
-        extusage["findwritablepointers"] = "\nfindwritablepointers / findwptrs : Perform heuristics against the FrontEnd and BackEnd allocators to determine exploitable conditions\n"
-        extusage["findwritablepointers"] += "-------------------------------------------------------------------------------------------------------------------------------------\n"
+        extusage["findwritablepointers"] = "\nfindwritablepointers / findwptrs : finds and w+ function pointers for application data attacks\n"
+        extusage["findwritablepointers"] += "----------------------------------------------------------------------------------------------\n"
         extusage["findwritablepointers"] += "Use -m to filter by module (use 'all' for all modules in the address space)\n"
         extusage["findwritablepointers"] += "Use -p to patch all the found function pointers\n"
         extusage["findwritablepointers"] += "Use -r to restore all the found function pointers\n"
@@ -989,7 +991,9 @@ class Heaper:
                     # tries to filter the IAT, but if it fails, no big deal
                     iat_table = self.get_modules_iat(usermod_obj)
                     for u in module_page:
-                        if u.section == ".text":
+                        
+                        # xp and windows 7 tested
+                        if u.section == ".text" or u.section == "CODE":
                             mod = self.imm.findModule(u.owner)
                             modname = mod[0]
                             usermod_obj = self.imm.getModule(modname)
@@ -1075,7 +1079,6 @@ class Heaper:
                                 if mempage:
                                     if self.meets_access_level(mempage, "W"):
 
-                                        #if not patch and not restore:
                                         # save and log the pointers
                                         self.patch_or_restore_ptrs(op)
                                         self.window.Log("0x%08x: %s" % (op.ip, op.result), op.ip)         
@@ -1193,21 +1196,21 @@ class Heaper:
         # we are restoring...
         elif restore and not patch:
             restore_dict = False
-            for knowledge in self.heaper.imm.listKnowledge():
+            for knowledge in self.imm.listKnowledge():
                 if re.match("fp", knowledge):
-                    restore_dict = self.heaper.imm.getKnowledge(knowledge)
-                    self.heaper.imm.forgetKnowledge(knowledge)
+                    restore_dict = self.imm.getKnowledge(knowledge)
+                    self.imm.forgetKnowledge(knowledge)
             if restore_dict:
                 for faddy, pointer in restore_dict.iteritems():
-                    self.heaper.imm.writeLong( faddy, pointer )
-                self.heaper.window.Log("")   
-                self.heaper.window.Log("(+) Restored function pointer(s)...")
-                self.heaper.window.Log("-" * 40)
+                    self.imm.writeLong( faddy, pointer )
+                self.window.Log("")   
+                self.window.Log("(+) Restored function pointer(s)...")
+                self.window.Log("-" * 40)
                 return "(+) Restored function pointer(s)..."
             else:
-                self.heaper.window.Log("")
-                self.heaper.window.Log("(!) Function pointer already restored...")
-                self.heaper.window.Log("-" * 40)
+                self.window.Log("")
+                self.window.Log("(!) Function pointer already restored...")
+                self.window.Log("-" * 40)
                 return "(!) Function pointer already restored..."
     
     def binary_to_decimal(self, binary):
@@ -1393,7 +1396,7 @@ class Hook():
 
     def set_lfh_chunks(self, a, rtlallocate):
         if a[0] == rtlallocate:
-
+            
             # lets log all the allocs
             if a[1][3] not in self.managed_chunks:
                 self.managed_chunks[a[1][3]] = {}
@@ -1401,8 +1404,8 @@ class Hook():
                 self.managed_chunks[a[1][3]]["free"]  = 0
             else:
                 self.managed_chunks[a[1][3]]["alloc"] += 1
-        else:
-
+        elif a[0] != rtlallocate:
+            self.imm.log("test: %s" % a[0])
             # lets log all the frees
             if a[1][2] not in self.managed_chunks:
                 self.managed_chunks[a[1][2]] = {}
@@ -1411,21 +1414,27 @@ class Hook():
             else:
                 self.managed_chunks[a[1][2]]["free"] += 1
 
-    def showresults(self, a, rtlallocate, extra = ""):
+    def showresults(self, a, rtlallocate, extra, df_detection):
         if a[0] == rtlallocate:
             if a[1][3] in self.double_free_chunks:
-                extra += "!! Potential double free on this chunk !!"
-                self.heaper.window.Log("*" * 107)
-                self.heaper.window.Log("RtlAllocateHeap(0x%08x, 0x%08x, 0x%08x) <= 0x%08x %s" % ( a[1][0], a[1][1], a[1][2], a[1][3], extra), address = a[1][3]  )
-                self.heaper.window.Log("*" * 107)
+                if df_detection:
+                    extra += "!! Potential double free on this chunk !!"
+                    self.heaper.window.Log("*" * 107)
+                    self.heaper.window.Log("RtlAllocateHeap(0x%08x, 0x%08x, 0x%08x) <= 0x%08x %s" % ( a[1][0], a[1][1], a[1][2], a[1][3], extra), address = a[1][3]  )
+                    self.heaper.window.Log("*" * 107)
+                elif not df_detection:
+                    self.heaper.window.Log("RtlAllocateHeap(0x%08x, 0x%08x, 0x%08x) <= 0x%08x %s" % ( a[1][0], a[1][1], a[1][2], a[1][3], extra), address = a[1][3]  )
             else:
                 self.heaper.window.Log("RtlAllocateHeap(0x%08x, 0x%08x, 0x%08x) <= 0x%08x %s" % ( a[1][0], a[1][1], a[1][2], a[1][3], extra), address = a[1][3]  )
         else:
             if a[1][2] in self.double_free_chunks:
-                extra += "!! Potential double free on this chunk !!"
-                self.heaper.window.Log("*" * 89)
-                self.heaper.window.Log("RtlFreeHeap(0x%08x, 0x%08x, 0x%08x) %s" % (a[1][0], a[1][1], a[1][2], extra), address = a[1][2])
-                self.heaper.window.Log("*" * 89)
+                if df_detection:
+                    extra += "!! Potential double free on this chunk !!"
+                    self.heaper.window.Log("*" * 89)
+                    self.heaper.window.Log("RtlFreeHeap(0x%08x, 0x%08x, 0x%08x) %s" % (a[1][0], a[1][1], a[1][2], extra), address = a[1][2])
+                    self.heaper.window.Log("*" * 89)
+                elif not df_detection:
+                    self.heaper.window.Log("RtlFreeHeap(0x%08x, 0x%08x, 0x%08x) %s" % (a[1][0], a[1][1], a[1][2], extra), address = a[1][2])
             else:
                 self.heaper.window.Log("RtlFreeHeap(0x%08x, 0x%08x, 0x%08x) %s" % (a[1][0], a[1][1], a[1][2], extra), address = a[1][2])
 
@@ -2502,7 +2511,7 @@ class Lookaside(Front_end):
                     #    +0x006 Sequence         : Uint2B
                     # ntdll!_SINGLE_LIST_ENTRY
                     #    +0x000 Next             : Ptr32 _SINGLE_LIST_ENTRY
-                mem = self.imm.readMemory( ListEntry, 0x30 )               
+                mem = self.heaper.imm.readMemory( ListEntry, 0x30 )               
                 ( Next, Depth, Sequence, Depth2, MaximumDepth,\
                 TotalAllocates, AllocateMisses, TotalFrees,\
                 FreeMisses, Type, Tag, Size, Allocate, Free) = struct.unpack("LHHHHLLLLLLLLL", mem)
@@ -3505,8 +3514,8 @@ def main(args):
                             heaper.heap     = heap_handle
                             heaper.pheap    = imm.getHeap( heaper.heap )
                             backend         = Listhintfreelist(heaper)
-                            backend.run() 
-                            backend.set_listhintfreeList_chunks() 
+                            backend.run()
+                            backend.set_listhintfreeList_chunks()
                             backend.perform_heuristics()
                     elif "-f" in args and "-b" not in args:
                         for heap_handle in imm.getHeapsAddress():
@@ -3514,7 +3523,7 @@ def main(args):
                             heaper.pheap    = imm.getHeap( heaper.heap )
                             frontend        = Lfh(heaper)
                             frontend.run()
-                            frontend.set_lfh_chunks()                    
+                            frontend.set_lfh_chunks()      
                             frontend.perform_heuristics()
                 elif heaper.os < 6.0:
                     for heap_handle in imm.getHeapsAddress():
@@ -3522,27 +3531,38 @@ def main(args):
                             heaper.heap     = heap_handle
                             heaper.pheap    = imm.getHeap( heaper.heap )
                             backend         = Freelist(heaper)
-                            backend.run() 
-                            backend.set_freelist_chunks() 
+                            backend.run()
+                            backend.set_freelist_chunks()
                             backend.perform_heuristics()
-                        elif "-f" in args and "-b" not in args:  
+                        elif "-f" in args and "-b" not in args:                
                             heaper.heap     = heap_handle
                             heaper.pheap    = imm.getHeap( heaper.heap )
                             frontend        = Lookaside(heaper)
-                            frontend.run()
-                            frontend.set_lookaside_chunks()                    
-                            frontend.perform_heuristics()
+                            if frontend.FrontEndHeapType != 0x2:
+                                frontend.run()
+                                frontend.set_lookaside_chunks()                    
+                                frontend.perform_heuristics()
+                            elif frontend.FrontEndHeapType == 0x2:                            
+                                heaper.window.Log("(!) The %s process is running under NT 5.X and using the LFH" % imm.getDebuggedName())
+                                heaper.window.Log("(!) If you reach this, email mr_me to fix the issues in immlib & heaplib")
+                                heaper.window.Log("=" * 40)
+                                return "(!) The %s process is running under NT 5.X and using the LFH" % imm.getDebuggedName()
+                        elif "-f" not in args and "-b" not in args:
+                            usage_text = heaper.cmds["exp"].usage.split("\n")
+                            for line in usage_text:
+                                heaper.window.Log(line)
+                            return "(!) Please include either -f (frontend) or -b (backend)"
                 
                 heaper.window.Log("=" * 40)
                 return "(!) Scanned all %d heap(s)" % len(imm.getHeapsAddress())
-            
-            
-            
-            elif not int(all_heaps, 16):
+            elif all_heaps != "all":
                 heaper.window.Log("")
                 heaper.window.Log("(!) invalid option '%s': try !heaper help exploit" % all_heaps)
                 heaper.window.Log("")
-                return "(!) invalid option: try !heaper help exploit"
+                usage_text = heaper.cmds["exp"].usage.split("\n")
+                for line in usage_text:
+                    heaper.window.Log(line)
+                return "(!) invalid option!"
 
         # dump function pointers
         # ======================
@@ -3557,7 +3577,7 @@ def main(args):
                     patch_val = args[args.index("-p")+1].lower().strip()
                 except:
                     return "(-) You must provide a argument to -p <address/all>"
-                return heaper.analyse_function_pointers(args, window, imm, True, patch_val, False, False)
+                return heaper.analyse_function_pointers(args, True, patch_val, False, False)
             elif "-r" in args and "-p" not in args:
                 restore = True
                 try:
@@ -3928,6 +3948,7 @@ def main(args):
                 show_hook       = False
                 pause_hook      = False
                 continue_hook   = False
+                df_detection    = False
                 window.Log("")
                 if "-h" in args and "-u" not in args and "-s" not in args:
                     enable_hook     = True
@@ -3950,56 +3971,60 @@ def main(args):
                         chunkaddress = int(args[args.index("-a")+1], 16)
                     except:
                         return "(-) Invalid chunk address porvided"
-                imm.pause()
+                if "-d" in args:
+                    df_detection = True
                 hook = Hook(imm, heaper)
                 hook.rtlallocate = hook.set_func_ret(1000)
-                name = "hardhookall"
+                immhook = immlib.Debugger()
+                Name = "hardhookall"
 
                 # We need to hook on the the ret point of RtlAllocateHeap so we can
                 # get the result of the allocation.
-                mod = imm.getModule("ntdll.dll")
+                mod = immhook.getModule("ntdll.dll")
                 if not mod.isAnalysed():
-                    imm.analyseCode( mod.getCodebase() )
+                    immhook.analyseCode( mod.getCodebase() )
 
-                # hard hook here  
+                # hard hook here             
                 if enable_hook:
-
-                    # use our own for less logging
-                    fast = STDCALLFastLogHook(imm)
+                    immhook.pause()    
+                    immhook.addKnowledge("FuncNames",  ( hook.rtlallocate, hook.rtlfree ) )
                     heaper.window.Log("(+) Hard hooking RtlAllocateHeap 0x%08x" % hook.rtlallocate, hook.rtlallocate)
                     heaper.window.Log("(+) Hard hooking RtlFreeHeap 0x%08x" % hook.rtlfree, hook.rtlfree)
                     heaper.window.Log("=" * 43)
                     heaper.window.Log("")
+                    fast = immlib.STDCALLFastLogHook( immhook )
                     fast.logFunction( hook.rtlfree, 3 )
+                    imm.log("Logging on Alloc 0x%08x" % hook.rtlallocate)
                     fast.logFunction( hook.rtlallocate, 0)
                     fast.logBaseDisplacement( "EBP",    8)
                     fast.logBaseDisplacement( "EBP",  0xC)
                     fast.logBaseDisplacement( "EBP", 0x10)
                     fast.logRegister( "EAX" )
                     fast.Hook()
-                    imm.addKnowledge(name, fast, force_add = 1)
-                    imm.addKnowledge("FuncNames",  ( hook.rtlallocate, hook.rtlfree ) )
+                    imm.addKnowledge(Name, fast, force_add = 1)
+                    return "(+) RtlAllocateHeap RtlFreeHeap Hooked!"
                 elif show_hook:
-                    fast = imm.getKnowledge(name)
+                    fast = immhook.getKnowledge(Name)
                     double_free = False
-                    rtlallocate, rtlfree = imm.getKnowledge("FuncNames")
-                    ret = fast.getAllLog()
-                    NDX = {rtlallocate: 3, rtlfree: 2}
                     if not fast:
                         heaper.window.Log("")
                         heaper.window.Log("(-) heap alloc/free is not hard hooked yet!")
                         heaper.window.Log("")
-                        return "(-) heap alloc/free is not hard hooked yet!"
+                        return "(-) heap alloc/free is not hard hooked yet!"    
+                    rtlallocate, rtlfree = immhook.getKnowledge("FuncNames")   
+                    ret = fast.getAllLog()
+                    NDX = {rtlallocate: 3, rtlfree: 2}
 
                     # first we set the chunks to find double frees..
                     # we want to known when they were allocated and freed
                     for a in ret:
-                        extra = ""                           
+                        extra = ""                          
                         if heaper.heap:
                             if heaper.heap == a[1][0]:
                                 hook.set_lfh_chunks(a, rtlallocate)                           
-                        else:
+                        elif not heaper.heap:
                             hook.set_lfh_chunks(a, rtlallocate)
+                    
                     for chunk in hook.managed_chunks:
 
                         # if the number of frees for a given chunk exceed the number of allocations
@@ -4015,21 +4040,26 @@ def main(args):
                                 if chunkaddress:
                                     if a[1][ NDX[ a[0] ] ] == chunkaddress:
                                         extra = "<---- * FOUND *"
-                                hook.showresults(a, rtlallocate, extra)        
+                                hook.showresults(a, rtlallocate, extra, df_detection)        
                         else:
                             if chunkaddress:
                                 if a[1][ NDX[ a[0] ] ] == chunkaddress:
                                     extra = "<---- * FOUND *"
-                            hook.showresults(a, rtlallocate, extra)
-                    for chunk in hook.managed_chunks:
-
-                        # if the number of frees for a given chunk exceed the number of allocations
-                        # we possibly have a double free
-                        if hook.managed_chunks[chunk]["free"] > hook.managed_chunks[chunk]["alloc"]:
-                            double_free = True
-                            heaper.window.Log("*" * 74)
-                            heaper.window.Log("(!) Warning - There is a potential double free with this chunk: 0x%08x" % chunk, chunk)
-                            heaper.window.Log("*" * 74)
+                            hook.showresults(a, rtlallocate, extra, df_detection)
+                            
+                    if df_detection:
+                        for chunk in hook.managed_chunks:
+    
+                            # if the number of frees for a given chunk exceed the number of allocations
+                            # we possibly have a double free
+                            
+                            
+                            if hook.managed_chunks[chunk]["free"] > (hook.managed_chunks[chunk]["alloc"]+1):
+                                double_free = True
+                                heaper.window.Log("*" * 74)
+                                heaper.window.Log("(!) Warning - There is a potential double free with this chunk: 0x%08x" % chunk, chunk)
+                                heaper.window.Log("*" * 74)
+                                
                     if double_free:
                         heaper.window.Log("")
                         if heaper.os < 6.0:
@@ -4050,20 +4080,20 @@ def main(args):
                     heaper.window.Log("")                 
                     return "(+) Traced %d functions" % len(ret)
                 elif disable_hook:
-                    fast = imm.getKnowledge( name )
+                    fast = immhook.getKnowledge( Name )
                     if not fast:
                         heaper.window.Log("")
                         heaper.window.Log("(-) Hook not set")
                         heaper.window.Log("")
                         return "(-) Hook not set" 
                     fast.unHook()
-                    imm.forgetKnowledge( name )     
+                    immhook.forgetKnowledge( Name )     
                     heaper.window.Log("")     
                     heaper.window.Log("(+) Hook has been removed")     
                     heaper.window.Log("")                      
                     return "(+) Hook has been removed"
                 elif clear_hook:
-                    fast = imm.getKnowledge(name)
+                    fast = imm.getKnowledge(Name)
                     if not fast:
                         heaper.window.Log("")
                         heaper.window.Log("(-) Hook not set")
@@ -4075,7 +4105,7 @@ def main(args):
                     heaper.window.Log("")                      
                     return "(+) Hook has been cleared"              
                 elif pause_hook:
-                    fast = imm.getKnowledge(name)
+                    fast = imm.getKnowledge(Name)
                     if not fast:
                         heaper.window.Log("")
                         heaper.window.Log("(-) Hook not set")
@@ -4086,13 +4116,13 @@ def main(args):
                         heaper.window.Log("(-) Error: not been able to pause the hook")
                         heaper.window.Log("")
                         return "(-) Error: not been able to pause the hook"
-                    imm.addKnowledge(name, fast, force_add = 1)
+                    imm.addKnowledge(Name, fast, force_add = 1)
                     heaper.window.Log("")
                     heaper.window.Log("(+) Hook paused")
                     heaper.window.Log("")
                     return "(+) Hook paused"
                 elif continue_hook:
-                    fast = imm.getKnowledge(name)
+                    fast = imm.getKnowledge(Name)
                     if not fast:
                         heaper.window.Log("")
                         heaper.window.Log("(-) Hook not set")
@@ -4103,7 +4133,7 @@ def main(args):
                         heaper.window.Log("(-) Error: not been able to continue the hook")
                         heaper.window.Log("")                        
                         return "(-) Error: not been able to continue the hook"
-                    imm.addKnowledge(name, fast, force_add = 1)
+                    imm.addKnowledge(Name, fast, force_add = 1)
                     heaper.window.Log("")
                     heaper.window.Log("(+) Continuing hook")
                     heaper.window.Log("")                    
