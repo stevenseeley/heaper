@@ -1818,7 +1818,6 @@ class Lfh(Front_end):
         index = 0
         if self.heaper.pheap.LFH:
             if self.heaper.pheap.LFH.LocalData:
-                self.heaper.window.Log("LocalData?")
                 for seginfo in self.heaper.pheap.LFH.LocalData.SegmentInfo:
                     subseg_management_list = seginfo.SubSegment
                     for subseg in subseg_management_list:
@@ -3563,25 +3562,48 @@ def main(args):
                     target_heap = int(all_heaps_or_heap,16)
                 except:
                     target_heap = 0
-                if target_heap in imm.getHeapsAddress():
-                    if "-b" in args and "-f" not in args:
-                        heaper.heap     = target_heap
-                        heaper.pheap    = imm.getHeap( heaper.heap )
-                        backend         = Freelist(heaper)
-                        backend.run()
-                        backend.set_freelist_chunks()
-                        backend.perform_heuristics()
-                    elif "-f" in args and "-b" not in args:                
-                        heaper.heap     = target_heap
-                        heaper.pheap    = imm.getHeap( heaper.heap )
-                        frontend        = Lookaside(heaper)
-                    else:
-                        usage_text = heaper.cmds["exp"].usage.split("\n")
-                        for line in usage_text:
-                            heaper.window.Log(line)
-                        window.Log("=" * 40)          
-                        return "(-) Please specify either -f (frontend) or -b (backend)"
                     
+                if target_heap in imm.getHeapsAddress():
+                    if heaper.os < 6.0:
+                        if "-b" in args and "-f" not in args:
+                            heaper.heap     = target_heap
+                            heaper.pheap    = imm.getHeap( heaper.heap )
+                            backend         = Freelist(heaper)
+                            backend.run()
+                            backend.set_freelist_chunks()
+                            backend.perform_heuristics()
+                        elif "-f" in args and "-b" not in args:                
+                            heaper.heap     = target_heap
+                            heaper.pheap    = imm.getHeap( heaper.heap )
+                            frontend        = Lookaside(heaper)
+                        else:
+                            usage_text = heaper.cmds["exp"].usage.split("\n")
+                            for line in usage_text:
+                                heaper.window.Log(line)
+                            window.Log("=" * 40)          
+                            return "(-) Please specify either -f (frontend) or -b (backend)"
+                    elif heaper.os >= 6.0:
+                        if "-b" in args and "-f" not in args:
+                            heaper.heap     = target_heap
+                            heaper.pheap    = imm.getHeap( heaper.heap )
+                            backend         = Listhintfreelist(heaper)
+                            backend.run()
+                            backend.set_listhintfreeList_chunks()
+                            backend.perform_heuristics()
+                        elif "-f" in args and "-b" not in args:
+                            heaper.heap     = target_heap
+                            heaper.pheap    = imm.getHeap( heaper.heap )
+                            frontend        = Lfh(heaper)
+                            frontend.run()
+                            frontend.set_lfh_chunks()      
+                            frontend.perform_heuristics()                        
+                        else:
+                            usage_text = heaper.cmds["exp"].usage.split("\n")
+                            for line in usage_text:
+                                heaper.window.Log(line)
+                            window.Log("=" * 40)          
+                            return "(-) Please specify either -f (frontend) or -b (backend)"                        
+                
                     return "(!) vulnerability analysis complete"
                 else:
                     heaper.window.Log("")
