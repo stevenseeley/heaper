@@ -128,7 +128,7 @@ class Heaper:
         extusage["freelistinuse"] = "\nfreelistinuse <heap> / fliu <heap> : analyse/patch the FreeListInUse structure\n"
         extusage["freelistinuse"] += "---------------------------------------------\n"
         extusage["freelistinuse"] += "Use -p <byte entry> to patch the FreeListInUse entry and set its bit\n"
-        extusage["freelistinuse"] += "eg !heaper 0x00a80000 -p 0x7c\n"
+        extusage["freelistinuse"] += "eg !heaper fliu 0x00a80000 -p 0x7c\n"
         extusage["dumppeb"] = "\ndumppeb / dp : Return the PEB entry address\n"
         extusage["dumppeb"] += "---------------------------------------------\n"
         extusage["dumppeb"] += "Use -m to view the PEB management structure\n"
@@ -2657,7 +2657,6 @@ class Freelist(Back_end):
         """
         perform heuristics for FreeList[n] and FreeList[0]
         """
-
         # attacks against FreeList[0] and FreeList[n]
         def print_bitmap_flip_attack():
             self.heaper.window.Log("Information regarding Bitmap flip attack:")
@@ -3347,7 +3346,9 @@ def main(args):
                     latest_build2 = latest_build.split("\r")
                     f.close()
                 except:
+                    window.Log("")
                     window.Log("(-) Please check your internet connection")
+                    window.Log("")
                     return "(-) Please check your internet connection"
                 window.Log("")
                 f = open(inspect.getfile(inspect.currentframe()),"r")
@@ -3355,16 +3356,18 @@ def main(args):
                 current_build2 = current_build.split("\r")
                 f.close()
                 if heaper.generate_githash("".join(latest_build2)) != heaper.generate_githash("".join(current_build2)):
-                    window.Log("(!) Detected older version...")
-                    window.Log("(!) Updating...")
+                    window.Log("(+) Detected older version...")
+                    window.Log("(+) Updating...")
                     write_new_file = open(inspect.getfile(inspect.currentframe()),'w')
                     for lines in latest_build2:
                         write_new_file.write(lines)
                     write_new_file.close()
-                    window.Log("(!) Update complete!")
+                    window.Log("(+) Update complete!")
+                    window.Log("")
                     return "(!) Update complete!" 
                 else:
                     window.Log("(+) This version is the latest version...")
+                    window.Log("")
                     return "(!) This version is the latest version..."
             else:
                 heaper.window.Log("")
@@ -3503,8 +3506,8 @@ def main(args):
         # exploit heuristics for a all heaps
         # ==================================
         elif args[0].lower().strip() == "exploit" or args[0].lower().strip() == "exp":
-            all_heaps = args[1].lower().strip().lower()
-            if all_heaps == "all":
+            all_heaps_or_heap = args[1].lower().strip().lower()
+            if all_heaps_or_heap == "all":
                 heaper.window.Log("")
                 if heaper.os >= 6.0:
                     if "-b" in args and "-f" not in args:
@@ -3547,7 +3550,7 @@ def main(args):
                                 heaper.window.Log("(!) If you reach this, email mr_me to fix the issues in immlib & heaplib")
                                 heaper.window.Log("=" * 40)
                                 return "(!) The %s process is running under NT 5.X and using the LFH" % imm.getDebuggedName()
-                        elif "-f" not in args and "-b" not in args:
+                        else:
                             usage_text = heaper.cmds["exp"].usage.split("\n")
                             for line in usage_text:
                                 heaper.window.Log(line)
@@ -3555,14 +3558,39 @@ def main(args):
                 
                 heaper.window.Log("=" * 40)
                 return "(!) Scanned all %d heap(s)" % len(imm.getHeapsAddress())
-            elif all_heaps != "all":
-                heaper.window.Log("")
-                heaper.window.Log("(!) invalid option '%s': try !heaper help exploit" % all_heaps)
-                heaper.window.Log("")
-                usage_text = heaper.cmds["exp"].usage.split("\n")
-                for line in usage_text:
-                    heaper.window.Log(line)
-                return "(!) invalid option!"
+            elif all_heaps_or_heap != "all":
+                try:
+                    target_heap = int(all_heaps_or_heap,16)
+                except:
+                    target_heap = 0
+                if target_heap in imm.getHeapsAddress():
+                    if "-b" in args and "-f" not in args:
+                        heaper.heap     = target_heap
+                        heaper.pheap    = imm.getHeap( heaper.heap )
+                        backend         = Freelist(heaper)
+                        backend.run()
+                        backend.set_freelist_chunks()
+                        backend.perform_heuristics()
+                    elif "-f" in args and "-b" not in args:                
+                        heaper.heap     = target_heap
+                        heaper.pheap    = imm.getHeap( heaper.heap )
+                        frontend        = Lookaside(heaper)
+                    else:
+                        usage_text = heaper.cmds["exp"].usage.split("\n")
+                        for line in usage_text:
+                            heaper.window.Log(line)
+                        window.Log("=" * 40)          
+                        return "(-) Please specify either -f (frontend) or -b (backend)"
+                    
+                    return "(!) vulnerability analysis complete"
+                else:
+                    heaper.window.Log("")
+                    heaper.window.Log("(!) invalid option '%s': try !heaper help exploit" % all_heaps_or_heap)
+                    heaper.window.Log("")
+                    usage_text = heaper.cmds["exp"].usage.split("\n")
+                    for line in usage_text:
+                        heaper.window.Log(line)
+                    return "(!) invalid option!"
 
         # dump function pointers
         # ======================
@@ -3828,27 +3856,28 @@ def main(args):
                         if backend.graphic_structure:
                             backend.generate_freelist_graph()
 
-            # perform hueristics against a specfic heap
-            # =========================================
-            elif args[0].lower().strip() == "exploit" or args[0].lower().strip() == "exp":
-                if heaper.os >= 6.0:    
-                    backend.set_listhintfreeList_chunks()
-                    frontend.set_lfh_chunks()
-                elif heaper.os < 6.0:
-                    backend.set_freelist_chunks()    
-                    frontend.set_lookaside_chunks()        
-                if "-f" in args:
-                    frontend.perform_heuristics()
-                elif "-b" in args:
-                    backend.perform_heuristics()
-                else:
-                    usage_text = heaper.cmds["exp"].usage.split("\n")
-                    for line in usage_text:
-                        heaper.window.Log(line)
-                    window.Log("=" * 40)          
-                    return "(-) Please specify either -f (frontend) or -b (backend)"
-                return "(!) vulnerability analysis complete"
-
+                """
+                # perform hueristics against a specfic heap
+                # =========================================
+                elif args[0].lower().strip() == "exploit" or args[0].lower().strip() == "exp":
+                    if heaper.os >= 6.0:    
+                        backend.set_listhintfreeList_chunks()
+                        frontend.set_lfh_chunks()
+                    elif heaper.os < 6.0:
+                        backend.set_freelist_chunks()    
+                        frontend.set_lookaside_chunks()        
+                    if "-f" in args:
+                        frontend.perform_heuristics()
+                    elif "-b" in args:
+                        backend.perform_heuristics()
+                    else:
+                        usage_text = heaper.cmds["exp"].usage.split("\n")
+                        for line in usage_text:
+                            heaper.window.Log(line)
+                        window.Log("=" * 40)          
+                        return "(-) Please specify either -f (frontend) or -b (backend)"
+                    return "(!) vulnerability analysis complete"
+                """
             # analyse segments
             # ================
             elif args[0].lower().strip() == "analysesegments" or args[0].lower().strip() == "as":
