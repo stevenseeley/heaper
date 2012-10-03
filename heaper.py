@@ -2005,32 +2005,54 @@ class Listhintfreelist(Back_end):
                             encoded_header = self.heaper.imm.readMemory(e[0]-0x8,0x4)
                             encoded_header = struct.unpack("L", encoded_header)[0] 
                             result = "%x" % (encoded_header ^ self.heaper.pheap.EncodingKey)
+                            
+                            # validate that the decoded chunk size is actually matching the 
+                            # bin size (a)+ BaseIndex
                             if (int(result[len(result)-4:len(result)],16) != a+block.BaseIndex 
                                 and (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff):
+                                
+                                # if the flink == blink, then it must be overwritten
+                                # because there is no such thing as sentinel nodes in nt 6.x backend
                                 if e[1] == e[2]:
-                                    chunk_list.append("size, flink and blink overwritten")      # validation
-                                    chunk_list.append(True)                                     # chunk is not overwritten 
+                                    chunk_list.append("size, flink and blink overwritten")      # size, flink and blink is overwritten
+                                    chunk_list.append(True)                                     # we have an overwrite 
                                 else:
-                                    chunk_list.append("size overwritten")                       # size overwrite
-                                    chunk_list.append(True)                                     # we have an overwrite        
+                                    chunk_list.append("size overwritten")                       # size overwritten only
+                                    chunk_list.append(True)                                     # we have an overwrite 
+                                    
+                            # Assuming the size is safe, lets just check out the flink and blink       
                             elif (a+block.BaseIndex) != 0x7f and (a+block.BaseIndex) != 0x7ff:
                                 if e[1] == e[2]:
-                                    chunk_list.append("flink and blink overwritten")            # validation
-                                    chunk_list.append(True)                                     # chunk is not overwritten 
+                                    chunk_list.append("flink and blink overwritten")            # flink and blink are overwritten only
+                                    chunk_list.append(True)                                     # we have an overwrite
+                                    
+                                # else, it must be the just the size thats overwritten
                                 else:
-                                    chunk_list.append("validated")                              # validation
+                                    chunk_list.append("validated")                              # Nothing is overwritten
                                     chunk_list.append(False)                                    # chunk is not overwritten
                             else:
-                                chunk_list.append("validated")                                  # validation
+                                chunk_list.append("validated")                                  # Nothing is overwritten
                                 chunk_list.append(False)                                        # chunk is not overwritten
+                            
+                            # finally append the chunk size for this list
                             if (int(a+block.BaseIndex) != 0x7f and int(a+block.BaseIndex) != 0x7ff):
                                 chunk_list.append(a+block.BaseIndex)                            # chunk size
 
                             # Listhint[7f] or Listhint[7ff] we dont know the chunk size
-                            # so lets get it from the chunks header..
+                            # so we definitely have to get it from the chunks header..
                             elif (int(a+block.BaseIndex) == 0x7f or int(a+block.BaseIndex) == 0x7ff):
                                 decoded_size = int(result[len(result)-4:len(result)],16)
-                                chunk_list.append(decoded_size)             # chunk size         
+                                if e[1] == e[2]:
+                                    chunk_list.append("flink and blink overwritten")            # size, flink and blink are overwritten only
+                                    chunk_list.append(True)                                     # we have an overwrite
+                                elif decoded_size > int(a+block.BaseIndex):
+                                    chunk_list.append("size overwritten")                       # size overwritten only
+                                    chunk_list.append(True)                                     # we have an overwrite
+                                elif decoded_size <= int(a+block.BaseIndex):
+                                    chunk_list.append("validated")                              # Nothing is overwritten
+                                    chunk_list.append(False)                                    # chunk is not overwritten
+                                # finally append the chunk size for this list
+                                chunk_list.append(decoded_size)                                 # chunk size      
                             self.listhintfreelist_chunks[bin_entry][1].append(chunk_list)
 
             # build the blocksindex structure
@@ -2893,25 +2915,33 @@ class Freelist(Back_end):
                         if bin_entry != 0:
 
                             # now lets validate the integrity of the linked list using safe unlinking checks
-                            # Not the last chunk in the entry..
-                            #if chunk_size != bin_entry and nextchunk_address != 1:
+                            # This is not the last chunk in the bin (because of nextchunk_address)
+                            # if chunk_size != bin_entry and nextchunk_address exists:
                             if chunk_size != bin_entry and nextchunk_address:
+                                
+                                # full unlink() macro validation
                                 if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address and not vuln_chunk:
                                     vuln_chunk = True
                                     chunk_data.append("Size, Flink and Blink")          # chunk validation failed
                                     chunk_data.append(True)                             # chunk validation failed
+                                    
+                                # else, its just the size thats incorrect ;)
                                 elif not vuln_chunk:
                                     vuln_chunk = True
                                     chunk_data.append("Size")                           # chunk validation failed
                                     chunk_data.append(True)                             # chunk validation failed                           
 
-                            # now lets validate the integrity of the linked list using safe unlinking checks and size validation
-                            # Last chunk in the entry...                          
+                            # This IS the last chunk in the bin (because nextchunk_address doesnt exist)
+                            # if chunk_size != bin_entry and nextchunk_address doesnt exists:                   
                             elif chunk_size != bin_entry and not nextchunk_address:
+                                
+                                # full unlink() macro validation
                                 if not vuln_chunk and (prevchunk_address != chunk_blink and chunk_flink != nextchunk_address):
                                     vuln_chunk = True
                                     chunk_data.append("Size, Flink and Blink")          # chunk validation failed
                                     chunk_data.append(True)                             # chunk validation failed
+                                
+                                # else, its just the size thats incorrect ;)
                                 elif not vuln_chunk:
                                     vuln_chunk = True
                                     chunk_data.append("Size")                           # chunk validation failed
@@ -2925,9 +2955,11 @@ class Freelist(Back_end):
 
                             # check if this chunk is not the last chunk in the entry
                             if not nextchunk_address:
+                                
+                                # full unlink() macro validation
                                 if prevchunk_address != chunk_blink and chunk_flink != nextchunk_address and not vuln_chunk:
                                     vuln_chunk = True
-                                    chunk_data.append("Size, Flink and Blink")          # chunk validation failed
+                                    chunk_data.append("Size, Flink and Blink")           # chunk validation failed
                                     chunk_data.append(True)                              # chunk validation failed
 
                                 # Now that we know the blink is in tack, 
